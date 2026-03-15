@@ -148,6 +148,7 @@ def scan_gmail_for_receipts(
             original_filename=hint_filename,
             service=drive_service,
             root_folder_id=root_folder_id,
+            email_date=email.date,
         )
 
         results.append(ScanResult(

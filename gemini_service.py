@@ -92,16 +92,33 @@ _PROMPT = f"""
 """
 
 
-def analyze_receipt(file_bytes: bytes, mime_type: str) -> dict:
+def analyze_receipt(file_bytes: bytes, mime_type: str, email_date: Optional[str] = None) -> dict:
     """
     Send the receipt image/PDF to Gemini and return the parsed result as a dict.
     Uses response_schema=ReceiptAnalysis to enforce structured output.
+    
+    Args:
+        file_bytes: The raw file data.
+        mime_type: MIME type (image/jpeg, application/pdf, etc).
+        email_date: Optional context of when the email was received.
     """
     blob = types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
 
+    prompt = _PROMPT
+    if email_date:
+        prompt += f"\n**הערה חשובה:** המייל התקבל בתאריך {email_date}. יש סבירות גבוהה מאוד שהתאריך במסמך זהה או סמוך לתאריך זה. השתמש בזה כעזר לזיהוי."
+
+    # Specific strictness for shops and professionals
+    prompt += """
+**דגשי סיווג נוספים:**
+- **קניות ואוכל (TEMU, Amazon, Wolt, 10bis):** סווג כהוצאה **פרטית** (is_business_expense=false) אלא אם ברור לחלוטין שמדובר ברכישה עסקית למופת (למשל חלקי מחשב בלבד).
+- **אנשי מקצוע:** זהה שמות כמו "רו"ח", "רואה חשבון", "ייעוץ מס" כהוצאה עסקית בביטחון גבוה.
+- **סינון נוקשה (is_actual_financial_document):** שלול מסמכים שאינם אישורי תשלום סופיים (הכרזות, הזמנות לאירועים, הצעות מחיר).
+"""
+
     response = _client.models.generate_content(
         model=GEMINI_MODEL,
-        contents=[_PROMPT, blob],
+        contents=[prompt, blob],
         config=types.GenerateContentConfig(
             temperature=0,
             response_mime_type="application/json",

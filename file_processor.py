@@ -172,6 +172,7 @@ def process_file(
     original_filename: str,
     service: Resource,
     root_folder_id: str = DRIVE_FOLDER_ID,
+    email_date: Optional[str] = None,
 ) -> ProcessResult:
     """Full pipeline for a single uploaded receipt file."""
 
@@ -190,7 +191,7 @@ def process_file(
     # 2. Gemini AI classification
     mime_type = _get_mime_type(original_filename)
     try:
-        ai_data = analyze_receipt(file_bytes, mime_type)
+        ai_data = analyze_receipt(file_bytes, mime_type, email_date=email_date)
     except Exception as exc:
         logger.error("Gemini error for '%s': %s", original_filename, exc)
         return ProcessResult(
