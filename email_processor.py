@@ -25,17 +25,25 @@ _PDF_TYPE = "application/pdf"
 _RECEIPT_SUBJECT_KEYWORDS = [
     # Hebrew
     "קבלה", "חשבונית", "חיוב", "אישור הזמנה", "אישור תשלום",
-    "הזמנה", "רכישה", "תשלום", "פקטורה",
+    "הזמנה", "רכישה", "תשלום", "פקטורה", "פירוט חיוב",
     # English
     "receipt", "invoice", "order confirmation", "payment confirmation",
     "payment receipt", "your order", "purchase", "charged", "billing",
-    "transaction", "paid",
+    "transaction", "paid", "confirmation",
 ]
 
 _RECEIPT_BODY_KEYWORDS = [
     "₪", "nis", "total", "סכום", "לתשלום", "סה\"כ", "מחיר",
     "amount due", "amount paid", "subtotal", "grand total",
-    "order total", "charged", "בוצע חיוב",
+    "order total", "charged", "בוצע חיוב", "כרטיס אשראי",
+    "visa", "mastercard", "american express", "כרטיס מס'",
+]
+
+# Exclusion keywords (if found in subject without strong receipt signals, skip)
+_EXCLUSION_KEYWORDS = [
+    "marketing", "promotion", "newsletter", "הצעת מחיר", "תזכורת",
+    "reminder", "offer", "discount", "sale", "מבצע", "דיוור",
+    "הצעה", "תזכורת לתשלום", "מעוניין", "תנאי שימוש", "privacy policy",
 ]
 
 # Regex for monetary amounts: ₪123, $99.99, 1,234 ₪ etc.
@@ -45,51 +53,65 @@ _MONEY_RE = _re.compile(
     _re.IGNORECASE,
 )
 
+# Regex for zero amounts: ₪0.00, 0 nis, 0.00 $, וכו'
+_ZERO_MONEY_RE = _re.compile(
+    r"(?:₪|\$|€|£|USD|ILS|EUR)\s*0(?:\.00)?|0(?:\.00)?\s*(?:₪|nis|ils)",
+    _re.IGNORECASE,
+)
 
-def is_likely_receipt(email: "EmailMessage", threshold: int = 2) -> bool:
+
+def is_likely_receipt(email: "EmailMessage", threshold: int = 3) -> tuple[bool, str]:
     """
     Fast pre-filter: score the email on cheap text signals.
-    Returns True only if score >= threshold (default: 2 signals needed).
+    Returns (True, "found") if score >= threshold,
+    Returns (False, "reason") otherwise.
 
     Scoring:
-     +3  PDF attachment
+     +4  PDF attachment
      +2  Image attachment (jpg/png)
      +2  Subject has a receipt keyword
      +1  Body has a receipt keyword
-     +2  Body contains a monetary amount (₪99, $19.99 etc.)
+     +2  Body contains a non-zero monetary amount
+     -5  Exclusion keyword in subject (hard skip)
+     -10 Zero monetary amount detected (hard skip)
     """
     score = 0
+    subj_lower = email.subject.lower()
+    body_lower = (email.body_text or email.body_html or "").lower()
 
-    # Attachment bonus (fastest check)
+    # 0. Hard exclusions
+    if any(kw.lower() in subj_lower for kw in _EXCLUSION_KEYWORDS):
+        return False, "exclusion_list"
+
+    # Specific check for common "0 NIS" trials
+    if _ZERO_MONEY_RE.search(body_lower) or "free trial" in body_lower or "ניסיון חינם" in body_lower:
+        # Some receipts for 0.00 exist but usually we don't want them
+        return False, "zero_amount"
+
+    # 1. Attachment bonus
     for att in email.attachments:
         if att.mime_type == _PDF_TYPE:
-            score += 3
+            score += 4
             break
         if att.mime_type in _IMAGE_TYPES:
             score += 2
             break
 
-    if score >= threshold:
-        return True
-
-    # Subject keyword check
-    subj_lower = email.subject.lower()
+    # 2. Subject keyword check
     if any(kw.lower() in subj_lower for kw in _RECEIPT_SUBJECT_KEYWORDS):
         score += 2
 
-    if score >= threshold:
-        return True
-
-    # Plain-text body checks (no rendering needed)
-    body = (email.body_text or email.body_html or "").lower()
-
-    if any(kw.lower() in body for kw in _RECEIPT_BODY_KEYWORDS):
+    # 3. Body text checks
+    if any(kw.lower() in body_lower for kw in _RECEIPT_BODY_KEYWORDS):
         score += 1
 
-    if _MONEY_RE.search(body):
+    if _MONEY_RE.search(body_lower):
         score += 2
 
-    return score >= threshold
+    if score >= threshold:
+        return True, "found"
+    
+    return False, "low_score"
 
 
 @dataclass

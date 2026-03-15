@@ -309,7 +309,13 @@ def _run_gmail_scan(drive_service) -> None:
     for r in results:
         subject = r.subject[:60] or "(ללא נושא)"
         if r.skipped:
-            st.markdown(f"⏭️ **{subject}** — לא נמצאה קבלה")
+            reason_map = {
+                "low_score": "סבירות נמוכה (לא נראה כמו קבלה)",
+                "zero_amount": "סכום 0 או ניסיון חינם",
+                "exclusion_list": "מייל שיווקי או פרסומי",
+            }
+            reason_text = reason_map.get(r.skip_reason, "לא נמצאה קבלה")
+            st.markdown(f"⏭️ **{subject}** — {reason_text}")
         elif r.error:
             st.error(f"❌ **{subject}** — {r.error}")
         elif r.process_result:

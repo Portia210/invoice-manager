@@ -37,6 +37,7 @@ class ScanResult:
     sender: str
     process_result: ProcessResult | None = None
     skipped: bool = False   # True = no receipt found in email
+    skip_reason: str = ""   # e.g. "low_score", "zero_amount", "exclusion_list"
     error: str = ""
 
 
@@ -91,12 +92,14 @@ def scan_gmail_for_receipts(
             continue
 
         # 4. Check likelihood (fast filter)
-        if not is_likely_receipt(email):
-            logger.info("Email skipped by fast filter (low score): %s", email.subject)
+        likely, reason = is_likely_receipt(email)
+        if not likely:
+            logger.info("Email skipped by fast filter (%s): %s", reason, email.subject)
             newly_scanned_ids.append(msg_id)
             results.append(ScanResult(
                 msg_id=msg_id, subject=email.subject,
                 sender=email.sender, skipped=True,
+                skip_reason=reason
             ))
             continue
 
