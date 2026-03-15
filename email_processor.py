@@ -20,6 +20,77 @@ logger = logging.getLogger(__name__)
 _IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 _PDF_TYPE = "application/pdf"
 
+# ── Fast receipt pre-filter ────────────────────────────────────────────────────
+# Keywords that strongly suggest a receipt/invoice email
+_RECEIPT_SUBJECT_KEYWORDS = [
+    # Hebrew
+    "קבלה", "חשבונית", "חיוב", "אישור הזמנה", "אישור תשלום",
+    "הזמנה", "רכישה", "תשלום", "פקטורה",
+    # English
+    "receipt", "invoice", "order confirmation", "payment confirmation",
+    "payment receipt", "your order", "purchase", "charged", "billing",
+    "transaction", "paid",
+]
+
+_RECEIPT_BODY_KEYWORDS = [
+    "₪", "nis", "total", "סכום", "לתשלום", "סה\"כ", "מחיר",
+    "amount due", "amount paid", "subtotal", "grand total",
+    "order total", "charged", "בוצע חיוב",
+]
+
+# Regex for monetary amounts: ₪123, $99.99, 1,234 ₪ etc.
+import re as _re
+_MONEY_RE = _re.compile(
+    r"(?:₪|\$|€|£|USD|ILS|EUR)\s*[\d,]+(?:\.\d+)?|[\d,]+(?:\.\d+)?\s*(?:₪|nis|ils)",
+    _re.IGNORECASE,
+)
+
+
+def is_likely_receipt(email: "EmailMessage", threshold: int = 2) -> bool:
+    """
+    Fast pre-filter: score the email on cheap text signals.
+    Returns True only if score >= threshold (default: 2 signals needed).
+
+    Scoring:
+     +3  PDF attachment
+     +2  Image attachment (jpg/png)
+     +2  Subject has a receipt keyword
+     +1  Body has a receipt keyword
+     +2  Body contains a monetary amount (₪99, $19.99 etc.)
+    """
+    score = 0
+
+    # Attachment bonus (fastest check)
+    for att in email.attachments:
+        if att.mime_type == _PDF_TYPE:
+            score += 3
+            break
+        if att.mime_type in _IMAGE_TYPES:
+            score += 2
+            break
+
+    if score >= threshold:
+        return True
+
+    # Subject keyword check
+    subj_lower = email.subject.lower()
+    if any(kw.lower() in subj_lower for kw in _RECEIPT_SUBJECT_KEYWORDS):
+        score += 2
+
+    if score >= threshold:
+        return True
+
+    # Plain-text body checks (no rendering needed)
+    body = (email.body_text or email.body_html or "").lower()
+
+    if any(kw.lower() in body for kw in _RECEIPT_BODY_KEYWORDS):
+        score += 1
+
+    if _MONEY_RE.search(body):
+        score += 2
+
+    return score >= threshold
+
 
 @dataclass
 class ExtractedReceipt:

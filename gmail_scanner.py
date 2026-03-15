@@ -23,7 +23,7 @@ from deduplication import (
     mark_emails_processed,
     save_metadata,
 )
-from email_processor import extract_receipt
+from email_processor import extract_receipt, is_likely_receipt
 from file_processor import ProcessResult, process_file
 from gmail_service import EmailMessage, fetch_email, list_receipt_message_ids
 
@@ -90,7 +90,17 @@ def scan_gmail_for_receipts(
             ))
             continue
 
-        # 4. Extract receipt content
+        # 4. Check likelihood (fast filter)
+        if not is_likely_receipt(email):
+            logger.info("Email skipped by fast filter (low score): %s", email.subject)
+            newly_scanned_ids.append(msg_id)
+            results.append(ScanResult(
+                msg_id=msg_id, subject=email.subject,
+                sender=email.sender, skipped=True,
+            ))
+            continue
+
+        # 5. Extract receipt content
         receipt = extract_receipt(email)
         newly_scanned_ids.append(msg_id)  # always mark as seen
 

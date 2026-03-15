@@ -1,4 +1,4 @@
 # Streamlit app configuration
 [server]
-headless = true
+headless = false
 enableCORS = false

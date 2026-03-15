@@ -215,13 +215,16 @@ def main() -> None:
     service = st.session_state["drive_service"]
 
     # ── Two action tabs ─────────────────────────────────────────────────────────
-    tab_upload, tab_gmail = st.tabs(["📎 העלאת קבצים", "📧 ייבא מהמייל"])
+    tab_upload, tab_gmail, tab_history = st.tabs(["📎 העלאת קבצים", "📧 ייבא מהמייל", "📜 היסטוריה"])
 
     with tab_upload:
         _upload_tab(service)
 
     with tab_gmail:
         _gmail_tab(service)
+
+    with tab_history:
+        _history_tab(service)
 
 
 def _upload_tab(service) -> None:
@@ -390,6 +393,59 @@ def _run_processing(uploaded_files: list, service) -> None:
                     f"  {link_md}"
                 )
 
+
+
+def _history_tab(service) -> None:
+    """Display history of processed receipts from metadata.json."""
+    st.markdown("### 📜 קבלות שנוספו למערכת")
+    st.info("כאן מופיע ריכוז של כל הקבלות שעובדו ונוספו ל-Google Drive.")
+
+    from deduplication import load_metadata
+    
+    with st.spinner("טוען היסטוריה מה-Drive..."):
+        try:
+            metadata, _ = load_metadata(service, DRIVE_FOLDER_ID)
+        except Exception as exc:
+            st.error(f"❌ שגיאה בטעינת היסטוריה: {exc}")
+            return
+
+    hashes = metadata.get("hashes", {})
+    if not hashes:
+        st.info("טרם עובדו קבלות.")
+        return
+
+    # Convert to list for display
+    history_data = []
+    for h, data in hashes.items():
+        history_data.append({
+            "תאריך": data.get("date", "לא ידוע"),
+            "סכום": f"{data.get('amount', 0):,.2f}" if data.get('amount') else "-",
+            "ספק": data.get("provider", "לא ידוע"),
+            "סוג": data.get("expense_type", "לא ידוע"),
+            "מקור": data.get("original_filename", h[:8]),
+            "קישור": data.get("drive_link", ""),
+        })
+
+    # Sort by date descending
+    history_data.sort(key=lambda x: x["תאריך"], reverse=True)
+
+    import pandas as pd
+    df = pd.DataFrame(history_data)
+    
+    # Show search/filter
+    search = st.text_input("🔍 חיפוש לפי ספק או סוג:", help="חפש בהיסטוריה המקומית")
+    if search:
+        df = df[df["ספק"].str.contains(search, case=False, na=False) | 
+                df["סוג"].str.contains(search, case=False, na=False)]
+
+    st.dataframe(
+        df,
+        column_config={
+            "קישור": st.column_config.LinkColumn("📂 Drive"),
+        },
+        use_container_width=True,
+        hide_index=True,
+    )
 
 
 if __name__ == "__main__":
