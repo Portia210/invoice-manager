@@ -8,12 +8,20 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ── Secrets ────────────────────────────────────────────────────────────────────
-GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
-DRIVE_FOLDER_ID: str = os.getenv("DRIVE_FOLDER_ID", "")
-CREDENTIALS_PATH: str = os.getenv("CREDENTIALS_PATH", "credentials.json")
+# ── Secrets ─────────────────────────────────────────────────────────────────────
+# Prefer st.secrets (Streamlit Cloud) → fall back to .env (local)
+def _get_secret(key: str, default: str = "") -> str:
+    try:
+        import streamlit as st
+        return st.secrets.get(key, os.getenv(key, default))
+    except Exception:
+        return os.getenv(key, default)
+
+GEMINI_API_KEY: str = _get_secret("GEMINI_API_KEY")
+DRIVE_FOLDER_ID: str = _get_secret("DRIVE_FOLDER_ID")
+CREDENTIALS_PATH: str = _get_secret("CREDENTIALS_PATH", "credentials.json")
 GEMINI_MODEL: str = "gemini-2.0-flash"
-APP_PASSWORD: str = os.getenv("APP_PASSWORD", "")  # Leave empty for local use
+APP_PASSWORD: str = _get_secret("APP_PASSWORD")
 
 # ── Hebrew Calendar ─────────────────────────────────────────────────────────────
 HEBREW_MONTHS: dict[int, str] = {

@@ -53,11 +53,25 @@ st.markdown(
 def _check_config() -> list[str]:
     """Return a list of configuration error messages."""
     errors = []
-    if not GEMINI_API_KEY:
-        errors.append("❌ `GEMINI_API_KEY` חסר בקובץ `.env`")
-    if not DRIVE_FOLDER_ID:
-        errors.append("❌ `DRIVE_FOLDER_ID` חסר בקובץ `.env`")
-    if not os.path.exists(CREDENTIALS_PATH):
+
+    # Check secrets from st.secrets (cloud) or env vars (local)
+    try:
+        gemini_key = st.secrets.get("GEMINI_API_KEY", GEMINI_API_KEY)
+        folder_id = st.secrets.get("DRIVE_FOLDER_ID", DRIVE_FOLDER_ID)
+        has_creds = (
+            "GOOGLE_CREDENTIALS" in st.secrets
+            or os.path.exists(CREDENTIALS_PATH)
+        )
+    except Exception:
+        gemini_key = GEMINI_API_KEY
+        folder_id = DRIVE_FOLDER_ID
+        has_creds = os.path.exists(CREDENTIALS_PATH)
+
+    if not gemini_key:
+        errors.append("❌ `GEMINI_API_KEY` חסר")
+    if not folder_id:
+        errors.append("❌ `DRIVE_FOLDER_ID` חסר")
+    if not has_creds:
         errors.append(f"❌ קובץ הרשאות Google לא נמצא: `{CREDENTIALS_PATH}`")
     return errors
 
