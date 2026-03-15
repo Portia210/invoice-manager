@@ -122,7 +122,7 @@ def _require_password() -> bool:
     with st.form("login", clear_on_submit=True):
         pwd = st.text_input("סיסמה", type="password", label_visibility="collapsed",
                             placeholder="הכנס סיסמה...")
-        submitted = st.form_submit_button("כניסה", use_container_width=True, type="primary")
+        submitted = st.form_submit_button("כניסה", width="stretch", type="primary")
 
     if submitted:
         if hmac.compare_digest(pwd.encode("utf-8"), APP_PASSWORD.encode("utf-8")):
@@ -247,7 +247,7 @@ def _upload_tab(service) -> None:
         st.info("ממתין לקבצים... העלה קבלה כדי להתחיל.")
         return
 
-    if st.button("🚀 עבד קבלות", type="primary", use_container_width=True):
+    if st.button("🚀 עבד קבלות", type="primary", width="stretch"):
         _run_processing(uploaded_files, service)
 
 
@@ -258,7 +258,7 @@ def _gmail_tab(service) -> None:
         "מיילים שנסרקו כבר לא יוצגו שוב בסריקות הבאות."
     )
 
-    if st.button("📧 ייבא קבלות מהמייל", type="primary", use_container_width=True, key="gmail_scan"):
+    if st.button("📧 ייבא קבלות מהמייל", type="primary", width="stretch", key="gmail_scan"):
         _run_gmail_scan(service)
 
 
@@ -470,7 +470,7 @@ def _history_tab(service) -> None:
             "ספק": st.column_config.TextColumn("🏢 ספק"),
             "סוג": st.column_config.TextColumn("🏷️ סוג"),
         },
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
