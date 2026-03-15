@@ -125,7 +125,7 @@ def _require_password() -> bool:
         submitted = st.form_submit_button("כניסה", use_container_width=True, type="primary")
 
     if submitted:
-        if hmac.compare_digest(pwd, APP_PASSWORD):
+        if hmac.compare_digest(pwd.encode("utf-8"), APP_PASSWORD.encode("utf-8")):
             st.session_state["authenticated"] = True
             st.session_state["login_attempts"] = 0
             st.rerun()
