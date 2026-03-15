@@ -137,6 +137,9 @@ def record_file(
     if ai_data:
         entry["date"] = ai_data.get("date", "")
         entry["amount"] = ai_data.get("total_amount")
+        entry["provider"] = ai_data.get("provider", "")
+        entry["expense_type"] = ai_data.get("expense_type", "")
+        entry["is_business"] = ai_data.get("is_business_expense", True)
     metadata["hashes"][md5_hash] = entry
     return metadata
 

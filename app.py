@@ -256,10 +256,12 @@ def _gmail_tab(service) -> None:
 
 
 def _run_gmail_scan(drive_service) -> None:
-    """Run Gmail scan and display results."""
+    """Run Gmail scan and display results with structured grouping."""
     st.divider()
-    progress = st.progress(0, text="מתחבר ל-Gmail...")
-    status = st.empty()
+    
+    # Live logging container
+    log_container = st.status("🔍 מתחיל סריקת Gmail...", expanded=True)
+    progress_bar = st.progress(0)
 
     try:
         gmail_svc = get_gmail_service()
@@ -269,8 +271,8 @@ def _run_gmail_scan(drive_service) -> None:
 
     def progress_cb(current: int, total: int, text: str) -> None:
         frac = (current / total) if total > 0 else 0
-        progress.progress(frac, text=text)
-        status.markdown(f"*{text}*")
+        progress_bar.progress(frac)
+        log_container.write(f"• {text}")
 
     try:
         results = scan_gmail_for_receipts(
@@ -281,125 +283,114 @@ def _run_gmail_scan(drive_service) -> None:
         )
     except Exception as exc:
         st.error(f"❌ שגיאת סריקה: {exc}")
+        log_container.update(label="❌ הסריקה נכשלה", state="error")
         return
 
-    progress.progress(1.0, text="✅ סריקה הושלמה!")
-    status.empty()
+    log_container.update(label="✅ הסריקה הושלמה", state="complete", expanded=False)
+    progress_bar.empty()
 
     if not results:
         st.success("✅ אין מיילים חדשים לעיבוד.")
         return
 
+    # Categorize results
+    success_list = [r for r in results if r.process_result and r.process_result.status == "success"]
+    skip_list = [r for r in results if r.skipped or (r.process_result and r.process_result.status == "duplicate")]
+    error_list = [r for r in results if r.error or (r.process_result and r.process_result.status == "error")]
+
     # Summary metrics
-    total = len(results)
-    uploaded = sum(1 for r in results if r.process_result and r.process_result.status == "success")
-    dupes = sum(1 for r in results if r.process_result and r.process_result.status == "duplicate")
-    skipped = sum(1 for r in results if r.skipped)
-    errors = sum(1 for r in results if r.error or (r.process_result and r.process_result.status == "error"))
-
     st.subheader("📊 סיכום סריקה")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("✅ הועלו", uploaded)
-    c2.metric("⚠️ כפולים", dupes)
-    c3.metric("⏭️ לא קבלה", skipped)
-    c4.metric("❌ שגיאות", errors)
+    c1, c2, c3 = st.columns(3)
+    c1.metric("✅ הועלו", len(success_list))
+    c2.metric("⏭️ דולגו", len(skip_list))
+    c3.metric("❌ שגיאות", len(error_list))
 
-    # Results list
-    st.markdown("### פירוט")
-    for r in results:
-        subject = r.subject[:60] or "(ללא נושא)"
-        if r.skipped:
-            reason_map = {
-                "low_score": "סבירות נמוכה (לא נראה כמו קבלה)",
-                "zero_amount": "סכום 0 או ניסיון חינם",
-                "exclusion_list": "מייל שיווקי או פרסומי",
-            }
-            reason_text = reason_map.get(r.skip_reason, "לא נמצאה קבלה")
-            st.markdown(f"⏭️ **{subject}** — {reason_text}")
-        elif r.error:
-            st.error(f"❌ **{subject}** — {r.error}")
-        elif r.process_result:
-            pr = r.process_result
-            if pr.status == "success":
-                biz = "✅" if pr.is_business else "🚫 NOT_BUSINESS"
-                link = f"[פתח]({pr.drive_link})" if pr.drive_link else ""
-                st.success(f"{biz} **{subject}**  \n`{pr.new_filename}` → {pr.target_folder} {link}")
-            elif pr.status == "duplicate":
-                st.warning(f"⚠️ **{subject}** — כפול, דולג")
-            else:
-                st.error(f"❌ **{subject}** — {pr.message}")
+    # Detailed results with expanders for clarity
+    if success_list:
+        with st.expander("✅ קבלות חדשות שהועלו", expanded=True):
+            for r in success_list:
+                pr = r.process_result
+                biz = "🏢" if pr.is_business else "👤"
+                st.markdown(
+                    f"**{biz} {pr.new_filename}**  \n"
+                    f"📂 תיקייה: `{pr.target_folder}` | [פתח ב-Drive]({pr.drive_link})"
+                )
+
+    if skip_list:
+        with st.expander("⏭️ מיילים שדולגו / כפולים", expanded=False):
+            for r in skip_list:
+                subject = r.subject[:60] or "(ללא נושא)"
+                if r.skipped:
+                    reason_map = {
+                        "low_score": "סבירות נמוכה (לא נראה כמו קבלה)",
+                        "zero_amount": "סכום 0 או ניסיון חינם",
+                        "exclusion_list": "מייל שיווקי או פרסומי",
+                    }
+                    reason_text = reason_map.get(r.skip_reason, "לא נמצאה קבלה")
+                    st.write(f"• **{subject}** — {reason_text}")
+                else:
+                    st.write(f"• **{subject}** — קובץ כפול ב-Drive")
+
+    if error_list:
+        with st.expander("❌ שגיאות ובעיות", expanded=True):
+            for r in error_list:
+                subject = r.subject[:60] or "(ללא נושא)"
+                err_msg = r.error or (r.process_result.message if r.process_result else "שגיאה לא ידועה")
+                st.error(f"**{subject}** — {err_msg}")
 
 
 def _run_processing(uploaded_files: list, service) -> None:
-    """Process all uploaded files and display results."""
+    """Process all uploaded files with structured UI feedback."""
     st.divider()
-    st.subheader(f"📊 מעבד {len(uploaded_files)} קובץ/ים...")
-
+    
+    log_container = st.status(f"📊 מעבד {len(uploaded_files)} קובץ/ים...", expanded=True)
+    progress_bar = st.progress(0)
+    
     results = []
-    progress_bar = st.progress(0, text="מתחיל עיבוד...")
     total = len(uploaded_files)
 
     for idx, uploaded_file in enumerate(uploaded_files):
         file_bytes = uploaded_file.read()
         filename = uploaded_file.name
 
-        progress_bar.progress(
-            (idx) / total,
-            text=f"מעבד ({idx + 1}/{total}): {filename}",
+        progress_bar.progress(idx / total)
+        log_container.write(f"• מעבד: **{filename}**")
+
+        result = process_file(
+            file_bytes=file_bytes,
+            original_filename=filename,
+            service=service,
+            root_folder_id=DRIVE_FOLDER_ID,
         )
-
-        with st.spinner(f"🔍 מנתח: {filename}"):
-            result = process_file(
-                file_bytes=file_bytes,
-                original_filename=filename,
-                service=service,
-                root_folder_id=DRIVE_FOLDER_ID,
-            )
-
         results.append(result)
 
-        # Per-file feedback
-        if result.status == "success":
-            st.success(f"✅ **{filename}** → `{result.new_filename}`  \n📁 {result.target_folder}")
-        elif result.status == "duplicate":
-            st.warning(f"⚠️ **{filename}** — קובץ כפול, דולג.")
-        else:
-            st.error(f"❌ **{filename}** — {result.message}")
+    progress_bar.empty()
+    log_container.update(label="✅ עיבוד הקבצים הושלם", state="complete", expanded=False)
 
-    progress_bar.progress(1.0, text="✅ עיבוד הושלם!")
+    # ── Grouped Results ───────────────────────────────────────────────────────
+    success_list = [r for r in results if r.status == "success"]
+    dupe_list = [r for r in results if r.status == "duplicate"]
+    error_list = [r for r in results if r.status == "error"]
 
-    # Summary table
-    st.divider()
-    st.subheader("📋 סיכום")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("✅ הועלו", len(success_list))
+    c2.metric("⚠️ כפולים", len(dupe_list))
+    c3.metric("❌ שגיאות", len(error_list))
 
-    success_count = sum(1 for r in results if r.status == "success")
-    dup_count = sum(1 for r in results if r.status == "duplicate")
-    error_count = sum(1 for r in results if r.status == "error")
+    if success_list:
+        with st.expander("✅ הועלו בהצלחה", expanded=True):
+            for r in success_list:
+                st.markdown(f"**{r.new_filename}**  \n📁 {r.target_folder} — [פתח ב-Drive]({r.drive_link})")
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("✅ הועלו בהצלחה", success_count)
-    col2.metric("⚠️ כפולים שדולגו", dup_count)
-    col3.metric("❌ שגיאות", error_count)
+    if dupe_list:
+        with st.expander("⚠️ קבצים כפולים (דולגו)", expanded=False):
+            for r in dupe_list:
+                st.write(f"• **{r.original_filename}**")
 
-    # Detailed results
-    if any(r.status == "success" for r in results):
-        st.markdown("### קישורים לקבצים שהועלו")
-        for r in results:
-            if r.status == "success":
-                ai = r.ai_data
-                amount = ai.get("total_amount")
-                amount_str = f" | **סכום:** ₪{amount:,.2f}" if amount else ""
-                link_md = f"[פתח ב-Drive]({r.drive_link})" if r.drive_link else ""
-                st.markdown(
-                    f"- 📄 `{r.new_filename}`  \n"
-                    f"  📁 `{r.target_folder}` | "
-                    f"**סוג:** {ai.get('expense_type', '')} | "
-                    f"**ספק:** {ai.get('provider', '')}"
-                    f"{amount_str}  \n"
-                    f"  {link_md}"
-                )
-
-
+    if error_list:
+        with st.expander("❌ שגיאות", expanded=True):
+            for r in error_list:
+                st.error(f"**{r.original_filename}** — {r.message}")
 
 def _history_tab(service) -> None:
     """Display history of processed receipts from metadata.json."""
@@ -438,16 +429,35 @@ def _history_tab(service) -> None:
     import pandas as pd
     df = pd.DataFrame(history_data)
     
-    # Show search/filter
-    search = st.text_input("🔍 חיפוש לפי ספק או סוג:", help="חפש בהיסטוריה המקומית")
+    # ── Filter UI ──────────────────────────────────────────────────────────────
+    c1, c2 = st.columns([2, 1])
+    search = c1.text_input("🔍 חיפוש לפי ספק או סוג:", help="חפש בהיסטוריה המקומית")
+    sort_on = c2.selectbox("מיין לפי:", ["תאריך ↓", "תאריך ↑", "סכום ↓", "ספק"], index=0)
+
     if search:
         df = df[df["ספק"].str.contains(search, case=False, na=False) | 
-                df["סוג"].str.contains(search, case=False, na=False)]
+                df["סוג"].str.contains(search, case=False, na=False) |
+                df["מקור"].str.contains(search, case=False, na=False)]
+
+    if sort_on == "תאריך ↓":
+        df = df.sort_values("תאריך", ascending=False)
+    elif sort_on == "תאריך ↑":
+        df = df.sort_values("תאריך", ascending=True)
+    elif sort_on == "סכום ↓":
+        # Temporary numeric column for sorting
+        df["_amt"] = df["סכום"].str.replace(",", "").replace("-", "0").astype(float)
+        df = df.sort_values("_amt", ascending=False).drop(columns=["_amt"])
+    elif sort_on == "ספק":
+        df = df.sort_values("ספק")
 
     st.dataframe(
         df,
         column_config={
-            "קישור": st.column_config.LinkColumn("📂 Drive"),
+            "קישור": st.column_config.LinkColumn("📂 פתח ב-Drive", width="medium"),
+            "סכום": st.column_config.TextColumn("💰 סכום", width="small"),
+            "תאריך": st.column_config.DateColumn("📅 תאריך", format="YYYY-MM-DD"),
+            "ספק": st.column_config.TextColumn("🏢 ספק"),
+            "סוג": st.column_config.TextColumn("🏷️ סוג"),
         },
         use_container_width=True,
         hide_index=True,
