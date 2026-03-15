@@ -25,11 +25,11 @@ _PDF_TYPE = "application/pdf"
 _RECEIPT_SUBJECT_KEYWORDS = [
     # Hebrew
     "קבלה", "חשבונית", "חיוב", "אישור הזמנה", "אישור תשלום",
-    "הזמנה", "רכישה", "תשלום", "פקטורה", "פירוט חיוב",
+    "הזמנה", "רכישה", "תשלום", "פקטורה", "פירוט חיוב", "תודה על ההזמנה",
     # English
     "receipt", "invoice", "order confirmation", "payment confirmation",
     "payment receipt", "your order", "purchase", "charged", "billing",
-    "transaction", "paid", "confirmation",
+    "transaction", "paid", "confirmation", "thanks for your order",
 ]
 
 _RECEIPT_BODY_KEYWORDS = [
@@ -44,18 +44,19 @@ _EXCLUSION_KEYWORDS = [
     "marketing", "promotion", "newsletter", "הצעת מחיר", "תזכורת",
     "reminder", "offer", "discount", "sale", "מבצע", "דיוור",
     "הצעה", "תזכורת לתשלום", "מעוניין", "תנאי שימוש", "privacy policy",
+    "מדיניות פרטיות", "הצטרפות", "welcome", "ברוך הבא",
 ]
 
 # Regex for monetary amounts: ₪123, $99.99, 1,234 ₪ etc.
 import re as _re
 _MONEY_RE = _re.compile(
-    r"(?:₪|\$|€|£|USD|ILS|EUR)\s*[\d,]+(?:\.\d+)?|[\d,]+(?:\.\d+)?\s*(?:₪|nis|ils)",
+    r"(?:₪|\$|€|£|USD|ILS|EUR)\s*[\d,]+(?:\.\d{2})?|[\d,]+(?:\.\d{2})?\s*(?:₪|nis|ils)",
     _re.IGNORECASE,
 )
 
-# Regex for zero amounts: ₪0.00, 0 nis, 0.00 $, וכו'
+# Regex for zero amounts: ₪0.00, 0.00 nis, 0.00 $, וכו'
 _ZERO_MONEY_RE = _re.compile(
-    r"(?:₪|\$|€|£|USD|ILS|EUR)\s*0(?:\.00)?|0(?:\.00)?\s*(?:₪|nis|ils)",
+    r"(?:₪|\$|€|£|USD|ILS|EUR)\s*0(?:\.00)?|0(?:\.00)?\s*(?:₪|nis|ils)|total\s*[:=]?\s*(?:₪|\$)?0(?:\.00)?",
     _re.IGNORECASE,
 )
 
@@ -79,23 +80,25 @@ def is_likely_receipt(email: "EmailMessage", threshold: int = 3) -> tuple[bool, 
     subj_lower = email.subject.lower()
     body_lower = (email.body_text or email.body_html or "").lower()
 
-    # 0. Hard exclusions
-    if any(kw.lower() in subj_lower for kw in _EXCLUSION_KEYWORDS):
+    # 0. Hard exclusions (unless it's a PDF which usually overrides newsletters)
+    has_pdf = any(att.mime_type == _PDF_TYPE for att in email.attachments)
+    
+    if any(kw.lower() in subj_lower for kw in _EXCLUSION_KEYWORDS) and not has_pdf:
         return False, "exclusion_list"
 
-    # Specific check for common "0 NIS" trials
+    # Specific check for common "0 NIS" trials or summaries
     if _ZERO_MONEY_RE.search(body_lower) or "free trial" in body_lower or "ניסיון חינם" in body_lower:
-        # Some receipts for 0.00 exist but usually we don't want them
-        return False, "zero_amount"
+        # Ignore zero-amount unless it specifically says "Invoice" and has a PDF
+        if not (has_pdf and ("invoice" in subj_lower or "חשבונית" in subj_lower)):
+            return False, "zero_amount"
 
     # 1. Attachment bonus
-    for att in email.attachments:
-        if att.mime_type == _PDF_TYPE:
-            score += 4
-            break
-        if att.mime_type in _IMAGE_TYPES:
-            score += 2
-            break
+    if has_pdf:
+        score += 4
+    
+    has_img = any(att.mime_type in _IMAGE_TYPES for att in email.attachments)
+    if has_img:
+        score += 2
 
     # 2. Subject keyword check
     if any(kw.lower() in subj_lower for kw in _RECEIPT_SUBJECT_KEYWORDS):
@@ -108,7 +111,10 @@ def is_likely_receipt(email: "EmailMessage", threshold: int = 3) -> tuple[bool, 
     if _MONEY_RE.search(body_lower):
         score += 2
 
-    if score >= threshold:
+    # If no attachments, we want a stricter threshold (usually at least keyword + money)
+    effective_threshold = threshold if (has_pdf or has_img) else 4
+
+    if score >= effective_threshold:
         return True, "found"
     
     return False, "low_score"

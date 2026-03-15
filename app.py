@@ -140,8 +140,15 @@ def _require_password() -> bool:
                 st.session_state["login_attempts"] = 0
                 st.error(f"🔒 נעילה זמנית ל-{_LOCKOUT_SECONDS} שניות")
 
-    return False
 
+logger = logging.getLogger(__name__)
+
+# Silence noisy background libraries
+logging.getLogger("fontTools").setLevel(logging.WARNING)
+logging.getLogger("weasyprint").setLevel(logging.WARNING)
+logging.getLogger("playwright").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("googleapiclient").setLevel(logging.WARNING)
 
 def main() -> None:
     st.title("🧾 מנהל קבלות חכם")
@@ -271,8 +278,12 @@ def _run_gmail_scan(drive_service) -> None:
 
     def progress_cb(current: int, total: int, text: str) -> None:
         frac = (current / total) if total > 0 else 0
-        progress_bar.progress(frac)
-        log_container.write(f"• {text}")
+        progress_label = f"סורק מיילים... ({current + 1}/{total})"
+        progress_bar.progress(frac, text=progress_label)
+        
+        # Only log significant events to the status container to keep it clean
+        if "**" in text or "✅" in text or "❌" in text:
+            log_container.write(f"• {text}")
 
     try:
         results = scan_gmail_for_receipts(

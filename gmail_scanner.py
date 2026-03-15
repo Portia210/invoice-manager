@@ -75,16 +75,32 @@ def scan_gmail_for_receipts(
     results: list[ScanResult] = []
     newly_scanned_ids: list[str] = []
 
+    def _save_checkpoint():
+        """Helper to persist current progress to Drive."""
+        nonlocal newly_scanned_ids
+        if not newly_scanned_ids:
+            return
+        meta, file_id = load_metadata(drive_service, root_folder_id)
+        updated = mark_emails_processed(newly_scanned_ids, meta)
+        try:
+            save_metadata(drive_service, root_folder_id, updated, file_id)
+            logger.info("Checkpoint: Saved %d processed IDs.", len(newly_scanned_ids))
+            newly_scanned_ids = []  # Clear after saving
+        except Exception as exc:
+            logger.warning("Checkpoint save failed: %s", exc)
+
+    total_checked = 0
     for idx, msg_id in enumerate(new_msg_ids):
+        total_checked += 1
         if progress_cb:
-            progress_cb(idx, total, f"בודק מייל {idx + 1}/{total}...")
+            progress_cb(idx, total, f"בודק מיילים... ({idx + 1}/{total})")
 
         # 3. Fetch full email
         try:
             email: EmailMessage = fetch_email(gmail_service, msg_id)
         except Exception as exc:
             logger.error("Failed to fetch email %s: %s", msg_id, exc)
-            newly_scanned_ids.append(msg_id)  # mark as seen so we skip next time
+            newly_scanned_ids.append(msg_id)
             results.append(ScanResult(
                 msg_id=msg_id, subject="(שגיאה בטעינה)", sender="",
                 error=str(exc),
@@ -94,18 +110,21 @@ def scan_gmail_for_receipts(
         # 4. Check likelihood (fast filter)
         likely, reason = is_likely_receipt(email)
         if not likely:
-            logger.info("Email skipped by fast filter (%s): %s", reason, email.subject)
+            # We mark as seen but don't spam the UI callback for every skip
             newly_scanned_ids.append(msg_id)
             results.append(ScanResult(
                 msg_id=msg_id, subject=email.subject,
                 sender=email.sender, skipped=True,
                 skip_reason=reason
             ))
+            # Save checkpoint every 10 skips to avoid huge redos
+            if len(newly_scanned_ids) >= 10:
+                _save_checkpoint()
             continue
 
         # 5. Extract receipt content
         receipt = extract_receipt(email)
-        newly_scanned_ids.append(msg_id)  # always mark as seen
+        newly_scanned_ids.append(msg_id) 
 
         if receipt is None:
             logger.info("No receipt found in email: %s", email.subject)
@@ -117,7 +136,7 @@ def scan_gmail_for_receipts(
 
         # 5. Process through standard pipeline
         if progress_cb:
-            progress_cb(idx, total, f"מעלה: {email.subject[:40]}...")
+            progress_cb(idx, total, f"**נמצאה קבלה!** מעבד: {email.subject[:40]}...")
 
         hint_filename = receipt.filename_hint or f"{email.subject[:50]}.pdf"
         # Ensure extension matches mime type
@@ -138,15 +157,11 @@ def scan_gmail_for_receipts(
             process_result=proc_result,
         ))
 
-    # 6. Persist updated processed IDs + any new hashes (metadata already updated
-    #    per file inside process_file, but we still need processed_email_ids)
-    metadata, metadata_file_id = load_metadata(drive_service, root_folder_id)
-    updated_metadata = mark_emails_processed(newly_scanned_ids, metadata)
-    try:
-        save_metadata(drive_service, root_folder_id, updated_metadata, metadata_file_id)
-        logger.info("Saved %d newly-scanned email IDs to metadata.", len(newly_scanned_ids))
-    except Exception as exc:
-        logger.warning("Could not save processed email IDs: %s", exc)
+        # Always save checkpoint after a successful upload processing
+        _save_checkpoint()
+
+    # 6. Final save for any remaining IDs
+    _save_checkpoint()
 
     if progress_cb:
         progress_cb(total, total, "✅ סריקת מייל הושלמה!")
