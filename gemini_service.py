@@ -28,11 +28,15 @@ _client = genai.Client(api_key=GEMINI_API_KEY)
 
 
 # ── Pydantic schema — Gemini will be forced to match this exactly ───────────────
+# ── Pydantic schema — Gemini will be forced to match this exactly ───────────────
 class ReceiptAnalysis(BaseModel):
-    date: str = Field(
-        description="תאריך הקבלה בפורמט YYYY-MM-DD. אם לא ידוע, השתמש בתאריך היום."
+    is_actual_financial_document: bool = Field(
+        description="True only if this is a real receipt, invoice, or payment confirmation with a price/transaction. False for invitations, marketing, tickets without price, or general info."
     )
-    provider: str = Field(description="שם הספק / העסק")
+    date: str = Field(
+        description="תאריך הקבלה בפורמט YYYY-MM-DD. אם מדובר בתמונה (וואטסאפ), חפש היטב את תאריך הצילום או התאריך המופיע במסמך."
+    )
+    provider: str = Field(description="שם הספק / העסק. אם בתמונה, נסה לזהות לוגו או כותרת.")
     expense_type: str = Field(
         description=f"סוג ההוצאה מהרשימה בלבד. אם לא הוצאה עסקית, החזר 'NOT_BUSINESS'. רשימה: {ALL_EXPENSES}"
     )
@@ -60,9 +64,24 @@ class ReceiptAnalysis(BaseModel):
 
 _PROMPT = f"""
 אתה מנתח קבלות וחשבוניות עסקיות בישראל.
-נתח את הקובץ המצורף ומלא את כל שדות ה-JSON.
+נתח את הקובץ המצורף (תמונה או PDF) ומלא את כל שדות ה-JSON בדיוק רב.
 
-רשימת הוצאות מוכרות (חובה לבחור מהרשימה, אלא אם לא עסקי):
+**דגש על איכות הזיהוי:**
+- אם זו תמונה (מצלמה, WhatsApp), נסה לפענח טקסט מטושטש כדי למצוא תאריך, ספק וסכום. 
+- אל תוותר מהר על שדות; חפש לוגואים, כותרות או חתימות.
+
+**כללי סינון (is_actual_financial_document):**
+- החזר `true` רק עבור מסמכים המעידים על עסקה כספית: קבלה, חשבונית מס, אישור תשלום, Receipt.
+- החזר `false` עבור: הזמנות לאירועים (Invitations), כרטיסי כניסה ללא מחיר, פרסומות, הצעות מחיר, או מיילים אינפורמטיביים.
+
+**כללי סיווג:**
+1. expense_type חייב להיות מהרשימה, או 'NOT_BUSINESS' אם לא הוצאה עסקית.
+2. is_business_expense=false עבור: קניות פרטיות, בידור, מנויים אישיים (נטפליקס, ספוטיפיי וכד'), מתנות.
+3. תאריך בפורמט YYYY-MM-DD. אם לא ידוע — השתמש בתאריך היום ({date.today()}).
+4. is_annual=true **רק** עבור פריטים מרשימת ההוצאות השנתיות.
+5. is_fixed_asset=true **רק** עבור רכוש קבוע.
+
+רשימת הוצאות מוכרות:
 {json.dumps(ALL_EXPENSES, ensure_ascii=False)}
 
 הוצאות שנתיות (is_annual=true):
@@ -70,14 +89,6 @@ _PROMPT = f"""
 
 רכוש קבוע (is_fixed_asset=true):
 {json.dumps(FIXED_ASSETS, ensure_ascii=False)}
-
-כללים:
-1. expense_type חייב להיות מהרשימה, או 'NOT_BUSINESS' אם לא הוצאה עסקית.
-2. is_business_expense=false עבור: קניות פרטיות, בידור, מנויים אישיים (נטפליקס, ספוטיפיי וכד'), מתנות.
-3. תאריך בפורמט YYYY-MM-DD. אם לא ידוע — השתמש בתאריך היום ({date.today()}).
-4. is_annual=true **רק** עבור פריטים מרשימת ההוצאות השנתיות.
-5. is_fixed_asset=true **רק** עבור רכוש קבוע.
-6. confidence — רמת ביטחון בין 0 ל-1.
 """
 
 

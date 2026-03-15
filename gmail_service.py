@@ -122,9 +122,15 @@ def fetch_email(service: Resource, msg_id: str) -> EmailMessage:
                 data=payload,
             ))
         elif ct == "text/html" and not body_html:
-            body_html = payload.decode(part.get_content_charset("utf-8"), errors="replace")
+            charset = part.get_content_charset("utf-8")
+            if charset == "unknown-8bit":
+                charset = "latin-1"
+            body_html = payload.decode(charset, errors="replace")
         elif ct == "text/plain" and not body_text:
-            body_text = payload.decode(part.get_content_charset("utf-8"), errors="replace")
+            charset = part.get_content_charset("utf-8")
+            if charset == "unknown-8bit":
+                charset = "latin-1"
+            body_text = payload.decode(charset, errors="replace")
 
     return EmailMessage(
         msg_id=msg_id,

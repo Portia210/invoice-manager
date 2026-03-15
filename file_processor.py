@@ -57,7 +57,7 @@ MIME_TYPES: dict[str, str] = {
 @dataclass
 class ProcessResult:
     original_filename: str
-    status: str  # "success" | "duplicate" | "error"
+    status: str  # "success" | "duplicate" | "error" | "skipped"
     message: str = ""
     target_folder: str = ""
     new_filename: str = ""
@@ -83,8 +83,10 @@ def _build_folder_path(
 ) -> tuple[str, str]:
     """
     Return (folder_id, folder_display_name) for the target leaf folder.
-    Structure: root → YYYY → (MM-YYYY | YYYY שנתי | Non-Business)
+    Structure: root → YYYY → (MM-YYYY | YYYY שנתי) [ → NON BUSINESS ]
     """
+    from config import NON_BUSINESS_FOLDER_NAME as NB_NAME
+    
     raw_date = ai_data.get("date", str(date.today()))
     try:
         parsed = date.fromisoformat(raw_date)
@@ -96,17 +98,24 @@ def _build_folder_path(
 
     is_business = ai_data.get("is_business_expense", True)
 
-    if not is_business:
-        leaf_name = NON_BUSINESS_FOLDER
-    elif ai_data.get("is_annual"):
-        leaf_name = f"{year_str} {ANNUAL_FOLDER_SUFFIX}"
+    # Base folder (Monthly or Annual)
+    if ai_data.get("is_annual"):
+        base_name = f"{year_str} {ANNUAL_FOLDER_SUFFIX}"
     else:
         month_str = f"{parsed.month:02d}-{parsed.year}"
-        leaf_name = month_str
+        base_name = month_str
 
-    leaf_id = find_or_create_folder(service, leaf_name, year_id)
-    display = f"{year_str}/{leaf_name}"
-    return leaf_id, display
+    base_id = find_or_create_folder(service, base_name, year_id)
+    
+    # If not business, nest it further
+    if not is_business:
+        target_id = find_or_create_folder(service, NB_NAME, base_id)
+        display = f"{year_str}/{base_name}/{NB_NAME}"
+    else:
+        target_id = base_id
+        display = f"{year_str}/{base_name}"
+
+    return target_id, display
 
 
 def _format_amount(ai_data: dict) -> str:
@@ -188,6 +197,16 @@ def process_file(
             original_filename=original_filename,
             status="error",
             message=f"שגיאה בניתוח AI: {exc}",
+        )
+
+    # 2.5 Strict Document check
+    if not ai_data.get("is_actual_financial_document", True):
+        logger.info("Skipping '%s': identified by AI as non-financial document.", original_filename)
+        return ProcessResult(
+            original_filename=original_filename,
+            status="skipped",
+            message="הקובץ זוהה כמידע כללי או הזמנה לאירוע (לא חשבונית/קבלה)",
+            ai_data=ai_data,
         )
 
     # 3. Secondary dedupe: same date + same amount

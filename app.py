@@ -306,7 +306,7 @@ def _run_gmail_scan(drive_service) -> None:
 
     # Categorize results
     success_list = [r for r in results if r.process_result and r.process_result.status == "success"]
-    skip_list = [r for r in results if r.skipped or (r.process_result and r.process_result.status == "duplicate")]
+    skip_list = [r for r in results if r.skipped or (r.process_result and r.process_result.status in ["duplicate", "skipped"])]
     error_list = [r for r in results if r.error or (r.process_result and r.process_result.status == "error")]
 
     # Summary metrics
@@ -339,6 +339,8 @@ def _run_gmail_scan(drive_service) -> None:
                     }
                     reason_text = reason_map.get(r.skip_reason, "לא נמצאה קבלה")
                     st.write(f"• **{subject}** — {reason_text}")
+                elif r.process_result and r.process_result.status == "skipped":
+                    st.write(f"• **{subject}** — {r.process_result.message}")
                 else:
                     st.write(f"• **{subject}** — קובץ כפול ב-Drive")
 
@@ -380,12 +382,12 @@ def _run_processing(uploaded_files: list, service) -> None:
 
     # ── Grouped Results ───────────────────────────────────────────────────────
     success_list = [r for r in results if r.status == "success"]
-    dupe_list = [r for r in results if r.status == "duplicate"]
+    skip_list = [r for r in results if r.status in ["duplicate", "skipped"]]
     error_list = [r for r in results if r.status == "error"]
 
     c1, c2, c3 = st.columns(3)
     c1.metric("✅ הועלו", len(success_list))
-    c2.metric("⚠️ כפולים", len(dupe_list))
+    c2.metric("⚠️ דולגו", len(skip_list))
     c3.metric("❌ שגיאות", len(error_list))
 
     if success_list:
@@ -393,10 +395,11 @@ def _run_processing(uploaded_files: list, service) -> None:
             for r in success_list:
                 st.markdown(f"**{r.new_filename}**  \n📁 {r.target_folder} — [פתח ב-Drive]({r.drive_link})")
 
-    if dupe_list:
-        with st.expander("⚠️ קבצים כפולים (דולגו)", expanded=False):
-            for r in dupe_list:
-                st.write(f"• **{r.original_filename}**")
+    if skip_list:
+        with st.expander("⚠️ קבצים שדולגו (כפולים או לא קבלות)", expanded=False):
+            for r in skip_list:
+                reason = "כבר קיים" if r.status == "duplicate" else "לא מסמך כספי"
+                st.write(f"• **{r.original_filename}** — {reason}")
 
     if error_list:
         with st.expander("❌ שגיאות", expanded=True):

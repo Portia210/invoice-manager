@@ -48,6 +48,7 @@ HEBREW_MONTHS: dict[int, str] = {
 METADATA_FILENAME = "metadata.json"
 FIXED_ASSET_SUFFIX = "רכוש קבוע"
 ANNUAL_FOLDER_SUFFIX = "שנתי"
+NON_BUSINESS_FOLDER_NAME = "NON BUSINESS"
 
 # ── Expense Categories ──────────────────────────────────────────────────────────
 # Monthly / regular operating expenses
