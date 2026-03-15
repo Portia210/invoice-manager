@@ -13,6 +13,16 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Iterator
 
+# Silence noisy background libraries
+NOISY_LOGGERS = [
+    "fontTools", "fontTools.subset", "fontTools.ttLib",
+    "weasyprint", "playwright", "httpx",
+    "googleapiclient", "google_auth_httplib2",
+    "PIL", "urllib3"
+]
+for logger_name in NOISY_LOGGERS:
+    logging.getLogger(logger_name).setLevel(logging.WARNING)
+
 from googleapiclient.discovery import build, Resource
 
 from config import GOOGLE_SCOPES, CREDENTIALS_PATH
@@ -43,7 +53,7 @@ class EmailMessage:
     msg_id: str
     subject: str
     sender: str
-    date_str: str
+    date: str
     body_html: str
     body_text: str
     attachments: list[EmailAttachment] = field(default_factory=list)
@@ -55,7 +65,7 @@ def get_gmail_service() -> Resource:
     from drive_service import _load_credentials  # reuse same auth flow
     creds = _load_credentials()
     service = build("gmail", "v1", credentials=creds, cache_discovery=False)
-    logger.info("Gmail service initialised.")
+    logger.debug("Gmail service initialised.")
     return service
 
 
@@ -84,7 +94,7 @@ def list_receipt_message_ids(
         if not next_page:
             break
 
-    logger.info("Found %d new candidate emails.", len(msg_ids))
+    logger.debug("Found %d new candidate emails.", len(msg_ids))
     return msg_ids
 
 
@@ -136,7 +146,7 @@ def fetch_email(service: Resource, msg_id: str) -> EmailMessage:
         msg_id=msg_id,
         subject=subject,
         sender=sender,
-        date_str=date_str,
+        date=date_str,
         body_html=body_html,
         body_text=body_text,
         attachments=attachments,

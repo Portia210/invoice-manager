@@ -173,15 +173,20 @@ def process_file(
     service: Resource,
     root_folder_id: str = DRIVE_FOLDER_ID,
     email_date: Optional[str] = None,
+    metadata: Optional[dict] = None,
+    metadata_file_id: Optional[str] = None,
 ) -> ProcessResult:
     """Full pipeline for a single uploaded receipt file."""
 
     # 1. MD5 deduplication (hard dedupe)
     md5_hash = compute_md5(file_bytes)
-    metadata, metadata_file_id = load_metadata(service, root_folder_id)
+    
+    # Use provided metadata or load from Drive
+    if metadata is None:
+        metadata, metadata_file_id = load_metadata(service, root_folder_id)
 
     if is_duplicate(md5_hash, metadata):
-        logger.info("Duplicate detected for '%s'", original_filename)
+        logger.debug("Duplicate detected for '%s'", original_filename)
         return ProcessResult(
             original_filename=original_filename,
             status="duplicate",
@@ -202,7 +207,7 @@ def process_file(
 
     # 2.5 Strict Document check
     if not ai_data.get("is_actual_financial_document", True):
-        logger.info("Skipping '%s': identified by AI as non-financial document.", original_filename)
+        logger.debug("Skipping '%s': identified by AI as non-financial document.", original_filename)
         return ProcessResult(
             original_filename=original_filename,
             status="skipped",
@@ -251,10 +256,13 @@ def process_file(
 
     # 6. Update metadata.json
     updated_metadata = record_file(md5_hash, original_filename, drive_link, metadata, ai_data)
-    try:
-        save_metadata(service, root_folder_id, updated_metadata, metadata_file_id)
-    except Exception as exc:
-        logger.warning("Could not save metadata: %s", exc)
+    
+    # Save to Drive only if we are managing metadata internally
+    if metadata_file_id and metadata is None:
+        try:
+            save_metadata(service, root_folder_id, updated_metadata, metadata_file_id)
+        except Exception as exc:
+            logger.warning("Could not save metadata: %s", exc)
 
     is_biz = ai_data.get("is_business_expense", True)
     return ProcessResult(

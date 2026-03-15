@@ -104,7 +104,7 @@ def get_drive_service() -> Resource:
     """Build and return an authenticated Google Drive service (cached singleton)."""
     creds = _load_credentials()
     service = build("drive", "v3", credentials=creds, cache_discovery=False)
-    logger.info("Google Drive service initialised.")
+    logger.debug("Google Drive service initialised.")
     return service
 
 
@@ -143,7 +143,7 @@ def create_folder(service: Resource, name: str, parent_id: str) -> str:
         .execute()
     )
     folder_id = folder["id"]
-    logger.info("Created folder '%s' (id=%s)", name, folder_id)
+    logger.debug("Created folder '%s' (id=%s)", name, folder_id)
     return folder_id
 
 
@@ -178,5 +178,5 @@ def upload_file(
     )
     file_id = uploaded["id"]
     link = uploaded.get("webViewLink", f"https://drive.google.com/file/d/{file_id}/view")
-    logger.info("Uploaded '%s' → %s", filename, link)
+    logger.debug("Uploaded '%s' → %s", filename, link)
     return file_id, link

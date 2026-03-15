@@ -106,11 +106,13 @@ def analyze_receipt(file_bytes: bytes, mime_type: str, email_date: Optional[str]
 
     prompt = _PROMPT
     if email_date:
-        prompt += f"\n**הערה חשובה:** המייל התקבל בתאריך {email_date}. יש סבירות גבוהה מאוד שהתאריך במסמך זהה או סמוך לתאריך זה. השתמש בזה כעזר לזיהוי."
+        prompt += f"\n**הערה חשובה:** המייל התקבל בתאריך {email_date}. יש סבירות גבוהה שהתאריך במסמך זהה או סמוך לתאריך זה. השתמש בזה כעזר לזיהוי."
 
     # Specific strictness for shops and professionals
     prompt += """
 **דגשי סיווג נוספים:**
+- **תוכנות ודיגיטל (SaaS, Subscriptions):** מנויים לתוכנות, שירותי ענן, וכלי עבודה דיגיטליים הם **תמיד** הוצאה עסקית (is_business_expense=true).
+- **במקרה של ספק:** אם לא ברור לחלוטין אם ההוצאה עסקית או פרטית, **ברירת המחדל היא הוצאה עסקית** (is_business_expense=true).
 - **קניות ואוכל (TEMU, Amazon, Wolt, 10bis):** סווג כהוצאה **פרטית** (is_business_expense=false) אלא אם ברור לחלוטין שמדובר ברכישה עסקית למופת (למשל חלקי מחשב בלבד).
 - **אנשי מקצוע:** זהה שמות כמו "רו"ח", "רואה חשבון", "ייעוץ מס" כהוצאה עסקית בביטחון גבוה.
 - **סינון נוקשה (is_actual_financial_document):** שלול מסמכים שאינם אישורי תשלום סופיים (הכרזות, הזמנות לאירועים, הצעות מחיר).
@@ -125,6 +127,8 @@ def analyze_receipt(file_bytes: bytes, mime_type: str, email_date: Optional[str]
             response_schema=ReceiptAnalysis,
         ),
     )
+    # Log results at debug level only
+    logger.debug("Gemini result: %s", response.text)
 
     try:
         result = ReceiptAnalysis.model_validate_json(response.text)
@@ -132,5 +136,5 @@ def analyze_receipt(file_bytes: bytes, mime_type: str, email_date: Optional[str]
         logger.error("Schema validation failed: %s\nRaw: %s", exc, response.text)
         raise ValueError(f"תשובת Gemini לא תואמת את הסכמה: {exc}") from exc
 
-    logger.info("Gemini classified: %s", result)
+    logger.debug("Gemini classified: %s", result) # Downgraded from info to debug
     return result.model_dump()

@@ -4,6 +4,18 @@ app.py — Streamlit UI for the Invoice Manager.
 
 from __future__ import annotations
 import logging
+
+# ── Silence noisy background libraries as early as possible ─────────────────────
+for noisy_logger in [
+    "fontTools", "fontTools.subset", "fontTools.ttLib", 
+    "weasyprint", "playwright", "httpx", 
+    "googleapiclient", "google_auth_httplib2",
+    "PIL", "urllib3", "google_genai", "google.auth",
+    "drive_service", "gmail_service", "gmail_scanner", 
+    "email_processor", "gemini_service", "file_processor"
+]:
+    logging.getLogger(noisy_logger).setLevel(logging.ERROR) # Use ERROR for maximum silence
+
 import os
 from datetime import date
 
@@ -142,13 +154,6 @@ def _require_password() -> bool:
 
 
 logger = logging.getLogger(__name__)
-
-# Silence noisy background libraries
-logging.getLogger("fontTools").setLevel(logging.WARNING)
-logging.getLogger("weasyprint").setLevel(logging.WARNING)
-logging.getLogger("playwright").setLevel(logging.WARNING)
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("googleapiclient").setLevel(logging.WARNING)
 
 def main() -> None:
     st.title("🧾 מנהל קבלות חכם")
@@ -422,7 +427,9 @@ def _history_tab(service) -> None:
 
     hashes = metadata.get("hashes", {})
     if not hashes:
-        st.info("טרם עובדו קבלות.")
+        st.info("📭 טרם עובדו קבלות. לאחר שתפעיל את הסורק או תעלה קבצים, הם יופיעו כאן.")
+        if st.button("🔄 רענן היסטוריה", width="stretch"):
+            st.rerun()
         return
 
     # Convert to list for display
@@ -435,10 +442,11 @@ def _history_tab(service) -> None:
             "סוג": data.get("expense_type", "לא ידוע"),
             "מקור": data.get("original_filename", h[:8]),
             "קישור": data.get("drive_link", ""),
+            "עסקי": "✅" if data.get("is_business", True) else "👤",
         })
 
     # Sort by date descending
-    history_data.sort(key=lambda x: x["תאריך"], reverse=True)
+    history_data.sort(key=lambda x: (x["תאריך"] == "לא ידוע", x["תאריך"]), reverse=True)
 
     import pandas as pd
     df = pd.DataFrame(history_data)
@@ -472,10 +480,14 @@ def _history_tab(service) -> None:
             "תאריך": st.column_config.DateColumn("📅 תאריך", format="YYYY-MM-DD"),
             "ספק": st.column_config.TextColumn("🏢 ספק"),
             "סוג": st.column_config.TextColumn("🏷️ סוג"),
+            "עסקי": st.column_config.TextColumn("📋"),
         },
         width="stretch",
         hide_index=True,
     )
+    
+    if st.button("🔄 רענן רשימה", icon="🔄"):
+        st.rerun()
 
 
 if __name__ == "__main__":

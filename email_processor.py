@@ -137,7 +137,7 @@ def extract_receipt(email: EmailMessage) -> ExtractedReceipt | None:
     # 1. PDF attachment
     for att in email.attachments:
         if att.mime_type == _PDF_TYPE:
-            logger.info("Using PDF attachment: %s", att.filename)
+            logger.debug("Using PDF attachment: %s", att.filename)
             return ExtractedReceipt(
                 data=att.data,
                 mime_type=_PDF_TYPE,
@@ -148,7 +148,7 @@ def extract_receipt(email: EmailMessage) -> ExtractedReceipt | None:
     # 2. Image attachment
     for att in email.attachments:
         if att.mime_type in _IMAGE_TYPES:
-            logger.info("Using image attachment: %s", att.filename)
+            logger.debug("Using image attachment: %s", att.filename)
             return ExtractedReceipt(
                 data=att.data,
                 mime_type=att.mime_type,
@@ -160,7 +160,7 @@ def extract_receipt(email: EmailMessage) -> ExtractedReceipt | None:
     if email.body_html:
         pdf_bytes = _html_to_pdf(email.body_html, email.subject)
         if pdf_bytes:
-            logger.info("Rendered HTML body to PDF for: %s", email.subject)
+            logger.debug("Rendered HTML body to PDF for: %s", email.subject)
             return ExtractedReceipt(
                 data=pdf_bytes,
                 mime_type=_PDF_TYPE,
