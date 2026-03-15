@@ -63,16 +63,34 @@ def _check_config() -> list[str]:
 
 
 # ── Password Gate ───────────────────────────────────────────────────────────────
+_MAX_ATTEMPTS = 5
+_LOCKOUT_SECONDS = 60
+
 def _require_password() -> bool:
     """
-    If APP_PASSWORD is set in .env, show a password form and block access.
-    Returns True if the user is authenticated (or no password is set).
+    Password gate with brute-force protection.
+    Returns True if authenticated (or no password configured).
     """
+    import hmac
+    import time
+
+    # No password → open (warn on cloud)
     if not APP_PASSWORD:
-        return True  # No password configured — open access (local use)
+        if os.getenv("STREAMLIT_SHARING_MODE"):  # running on Streamlit Cloud
+            st.warning("⚠️ `APP_PASSWORD` לא הוגדר — האפליקציה פתוחה לכולם!")
+        return True
 
     if st.session_state.get("authenticated"):
         return True
+
+    # Brute-force protection
+    attempts = st.session_state.get("login_attempts", 0)
+    lockout_until = st.session_state.get("lockout_until", 0)
+
+    if time.time() < lockout_until:
+        remaining = int(lockout_until - time.time())
+        st.error(f"🔒 יותר מדי ניסיונות. נסה שוב בעוד {remaining} שניות.")
+        return False
 
     st.markdown(
         """
@@ -91,11 +109,20 @@ def _require_password() -> bool:
         submitted = st.form_submit_button("כניסה", use_container_width=True, type="primary")
 
     if submitted:
-        if pwd == APP_PASSWORD:
+        if hmac.compare_digest(pwd, APP_PASSWORD):
             st.session_state["authenticated"] = True
+            st.session_state["login_attempts"] = 0
             st.rerun()
         else:
-            st.error("❌ סיסמה שגויה")
+            attempts += 1
+            st.session_state["login_attempts"] = attempts
+            remaining = _MAX_ATTEMPTS - attempts
+            if remaining > 0:
+                st.error(f"❌ סיסמה שגויה ({remaining} ניסיונות נותרו)")
+            else:
+                st.session_state["lockout_until"] = time.time() + _LOCKOUT_SECONDS
+                st.session_state["login_attempts"] = 0
+                st.error(f"🔒 נעילה זמנית ל-{_LOCKOUT_SECONDS} שניות")
 
     return False
 
