@@ -22,6 +22,8 @@ from config import CREDENTIALS_PATH, GOOGLE_SCOPES as SCOPES
 
 logger = logging.getLogger(__name__)
 TOKEN_PATH = "token.json"
+import threading
+_FOLDER_LOCK = threading.Lock() # Prevent duplicate folder creation in parallel runs
 
 
 def _is_streamlit_cloud() -> bool:
@@ -36,6 +38,7 @@ def _is_streamlit_cloud() -> bool:
         return False
 
 
+@lru_cache(maxsize=1)
 def _load_credentials():
     """Auto-detect environment and return authenticated Google credentials."""
 
@@ -81,7 +84,7 @@ def _load_credentials():
     creds = Credentials.from_authorized_user_file(TOKEN_PATH, SCOPES)
 
     if creds and creds.valid:
-        logger.info("Auth: OAuth2 token loaded from %s", TOKEN_PATH)
+        logger.debug("Auth: OAuth2 token loaded from %s", TOKEN_PATH)
         return creds
 
     if creds and creds.expired and creds.refresh_token:
@@ -99,12 +102,20 @@ def _load_credentials():
     )
 
 
-@lru_cache(maxsize=1)
 def get_drive_service() -> Resource:
-    """Build and return an authenticated Google Drive service (cached singleton)."""
+    """Build and return an authenticated Google Drive service."""
+    import httplib2
+    import google_auth_httplib2
     creds = _load_credentials()
-    service = build("drive", "v3", credentials=creds, cache_discovery=False)
-    logger.debug("Google Drive service initialised.")
+    
+    # To fix SSL record layer issues in multi-threading, we must use an isolated HTTP object.
+    # However, 'http' and 'credentials' are mutually exclusive in build().
+    # We must wrap the isolated http object with credentials using AuthorizedHttp.
+    http = httplib2.Http()
+    authed_http = google_auth_httplib2.AuthorizedHttp(creds, http=http)
+    
+    service = build("drive", "v3", http=authed_http, cache_discovery=False)
+    logger.debug("Google Drive service initialised with isolated authorized transport.")
     return service
 
 
@@ -149,11 +160,12 @@ def create_folder(service: Resource, name: str, parent_id: str) -> str:
 
 def find_or_create_folder(service: Resource, name: str, parent_id: str) -> str:
     """Find or create a folder by name under parent_id. Returns folder ID."""
-    existing = find_folder(service, name, parent_id)
-    if existing:
-        logger.debug("Found existing folder '%s' (id=%s)", name, existing)
-        return existing
-    return create_folder(service, name, parent_id)
+    with _FOLDER_LOCK:
+        existing = find_folder(service, name, parent_id)
+        if existing:
+            logger.debug("Found existing folder '%s' (id=%s)", name, existing)
+            return existing
+        return create_folder(service, name, parent_id)
 
 
 def upload_file(

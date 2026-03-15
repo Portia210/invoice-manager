@@ -19,6 +19,9 @@ logger = logging.getLogger(__name__)
 # MIME types we consider as possible direct receipt files
 _IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 _PDF_TYPE = "application/pdf"
+import threading
+_PLAYWRIGHT_SEMAPHORE = threading.Semaphore(2) # Limit concurrent browsers to prevent crashes
+
 
 # ── Fast receipt pre-filter ────────────────────────────────────────────────────
 # Keywords that strongly suggest a receipt/invoice email
@@ -45,6 +48,7 @@ _EXCLUSION_KEYWORDS = [
     "reminder", "offer", "discount", "sale", "מבצע", "דיוור",
     "הצעה", "תזכורת לתשלום", "מעוניין", "תנאי שימוש", "privacy policy",
     "מדיניות פרטיות", "הצטרפות", "welcome", "ברוך הבא",
+    "onboarding", "on board", "lesson", "שיעור", "שיעורים", "חומרי לימוד", "סילבוס",
 ]
 
 # Regex for monetary amounts: ₪123, $99.99, 1,234 ₪ etc.
@@ -185,40 +189,50 @@ def extract_receipt(email: EmailMessage) -> ExtractedReceipt | None:
 
 def _html_to_pdf(html: str, title: str = "") -> bytes | None:
     """
-    Convert HTML to PDF.
-    Tries Playwright first (best quality), falls back to WeasyPrint.
+    Convert HTML to PDF using Playwright (only).
+    Uses a semaphore to limit concurrent browser launches.
     """
-    # Try Playwright
-    try:
-        return _html_to_pdf_playwright(html)
-    except Exception as exc:
-        logger.warning("Playwright failed (%s), trying WeasyPrint...", exc)
-
-    # Fallback: WeasyPrint
-    try:
-        return _html_to_pdf_weasyprint(html)
-    except Exception as exc:
-        logger.error("WeasyPrint also failed: %s", exc)
+    # Defensive check: if html is very short or empty, skip
+    if not html or len(html.strip()) < 10:
         return None
+
+    with _PLAYWRIGHT_SEMAPHORE:
+        try:
+            return _html_to_pdf_playwright(html)
+        except AttributeError as att:
+            if "'PlaywrightContextManager' object has no attribute '_playwright'" in str(att):
+                logger.error("Playwright driver failed to initialize. Try running 'playwright install'.")
+            else:
+                logger.error("Playwright AttributeError: %s", att)
+            return None
+        except Exception as exc:
+            logger.error("Playwright PDF conversion failed: %s", exc)
+            return None
 
 
 def _html_to_pdf_playwright(html: str) -> bytes:
-    """Render HTML → PDF using Playwright headless Chromium."""
-    from playwright.sync_api import sync_playwright  # type: ignore
-
+    """Render HTML → PDF using Playwright headless Chromium with thread safety."""
+    from playwright.sync_api import sync_playwright
+    
+    # We create a fresh playwright instance for every call to ensure isolation in threads
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page()
-        page.set_content(html, wait_until="networkidle")
-        pdf_bytes = page.pdf(format="A4", print_background=True)
-        browser.close()
-    return pdf_bytes
+        # Prevent Playwright from handling signals which can crash in multi-threaded Streamlit
+        browser = p.chromium.launch(
+            handle_sigint=False,
+            handle_sigterm=False,
+            handle_sighup=False
+        )
+        try:
+            context = browser.new_context()
+            page = context.new_page()
+            # Use 'load' instead of 'networkidle' for better stability in some environments
+            page.set_content(html, wait_until="load")
+            pdf_bytes = page.pdf(format="A4", print_background=True)
+            return pdf_bytes
+        finally:
+            browser.close()
 
 
-def _html_to_pdf_weasyprint(html: str) -> bytes:
-    """Render HTML → PDF using WeasyPrint (pure Python fallback)."""
-    from weasyprint import HTML  # type: ignore
-    return HTML(string=html).write_pdf()
 
 
 def _text_to_pdf(text: str, title: str = "") -> bytes | None:

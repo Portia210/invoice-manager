@@ -22,6 +22,7 @@ DRIVE_FOLDER_ID: str = _get_secret("DRIVE_FOLDER_ID")
 CREDENTIALS_PATH: str = _get_secret("CREDENTIALS_PATH", "credentials.json")
 GEMINI_MODEL: str = "gemini-2.0-flash"
 APP_PASSWORD: str = _get_secret("APP_PASSWORD")
+REQUIRE_PASSWORD: bool = _get_secret("REQUIRE_PASSWORD", "TRUE").upper() != "FALSE"
 
 # ── OAuth Scopes ─────────────────────────────────────────────────────────────────
 GOOGLE_SCOPES: list[str] = [
@@ -69,13 +70,11 @@ MONTHLY_EXPENSES: list[str] = [
     "השתלמויות",
     "ייעוץ מקצועי",
     "יחסי ציבור",
-    "כבוד קל ללקוחות",
-    "קפה וחד פעמי",
+    "כיבוד קל", # coffee, cookies, etc (no meals)
     "משפטיות",
-    "הוצאות לעורך דין",
     "משרדיות",
     "ציוד משרדי",
-    "נסיעות",
+    "הוצאות רכב",
     "תחבורה ציבורית",
     "מוניות",
     "ספרות מקצועית",
@@ -83,7 +82,6 @@ MONTHLY_EXPENSES: list[str] = [
     "פרסום",
     "פייסבוק וגוגל",
     "רשתות חברתיות",
-    "רכב - הוצאות משתנות",
     "דלק",
     "חשמל לרכב",
     "חניה",
@@ -110,18 +108,17 @@ ANNUAL_EXPENSES: list[str] = [
     "ביטוח משרד",
     "ביטוח אחריות מקצועית",
     "הוצאות ריבית",
-    "הלוואות",
-    "עמלות בנק",
+    "הלוואות לעסק",
 ]
 
 # Fixed assets → append "רכוש קבוע" to filename
 FIXED_ASSETS: list[str] = [
     "רכוש קבוע",
-    "רכב",
-    "מחשב",
-    "מדפסת",
-    "מסך",
-    "טלפון נייד",
+    "רכב קניה",
+    "מחשב קניה",
+    "מדפסת קניה",
+    "מסך קניה",
+    "טלפון קניה",
     "בניית אתר אינטרנט",
 ]
 

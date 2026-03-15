@@ -170,13 +170,17 @@ def _build_filename(ai_data: dict, original_filename: str, possibly_duplicate: b
 def process_file(
     file_bytes: bytes,
     original_filename: str,
-    service: Resource,
+    service: Resource | None = None,
     root_folder_id: str = DRIVE_FOLDER_ID,
-    email_date: Optional[str] = None,
-    metadata: Optional[dict] = None,
-    metadata_file_id: Optional[str] = None,
+    email_date: str | None = None,
+    metadata: dict | None = None,
+    metadata_file_id: str | None = None,
+    email_body: str | None = None,
 ) -> ProcessResult:
     """Full pipeline for a single uploaded receipt file."""
+    if service is None:
+        from drive_service import get_drive_service
+        service = get_drive_service()
 
     # 1. MD5 deduplication (hard dedupe)
     md5_hash = compute_md5(file_bytes)
@@ -196,7 +200,7 @@ def process_file(
     # 2. Gemini AI classification
     mime_type = _get_mime_type(original_filename)
     try:
-        ai_data = analyze_receipt(file_bytes, mime_type, email_date=email_date)
+        ai_data = analyze_receipt(file_bytes, mime_type, email_date=email_date, email_body=email_body)
     except Exception as exc:
         logger.error("Gemini error for '%s': %s", original_filename, exc)
         return ProcessResult(

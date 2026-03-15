@@ -13,15 +13,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Iterator
 
-# Silence noisy background libraries
-NOISY_LOGGERS = [
-    "fontTools", "fontTools.subset", "fontTools.ttLib",
-    "weasyprint", "playwright", "httpx",
-    "googleapiclient", "google_auth_httplib2",
-    "PIL", "urllib3"
-]
-for logger_name in NOISY_LOGGERS:
-    logging.getLogger(logger_name).setLevel(logging.WARNING)
+import logger_setup
 
 from googleapiclient.discovery import build, Resource
 
@@ -59,7 +51,6 @@ class EmailMessage:
     attachments: list[EmailAttachment] = field(default_factory=list)
 
 
-@lru_cache(maxsize=1)
 def get_gmail_service() -> Resource:
     """Return authenticated Gmail API service (shares token with Drive)."""
     from drive_service import _load_credentials  # reuse same auth flow

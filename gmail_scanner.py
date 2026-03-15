@@ -11,6 +11,7 @@ Flow:
 
 from __future__ import annotations
 import logging
+import traceback
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -45,21 +46,24 @@ import concurrent.futures
 import threading
 
 def scan_gmail_for_receipts(
-    drive_service: Resource,
-    gmail_service: Resource,
     root_folder_id: str = DRIVE_FOLDER_ID,
     progress_cb: Callable[[int, int, str], None] | None = None,
+    stop_event: threading.Event | None = None,
 ) -> list[ScanResult]:
     """
     Scan Gmail inbox, find receipt emails not yet processed, and upload to Drive.
     Uses concurrency to speed up processing.
     """
+    from drive_service import get_drive_service
+    drive_service = get_drive_service()
     # 1. Load metadata → get already-processed email IDs
     metadata, metadata_file_id = load_metadata(drive_service, root_folder_id)
     processed_ids = get_processed_email_ids(metadata)
     logger.debug("Already processed %d email IDs.", len(processed_ids))
 
-    # 2. Query Gmail for new candidate emails
+    # 2. Initialise Gmail once for ID listing (single thread)
+    from gmail_service import get_gmail_service
+    gmail_service = get_gmail_service()
     new_msg_ids = list_receipt_message_ids(gmail_service, exclude_ids=processed_ids)
     total = len(new_msg_ids)
     logger.debug("New emails to check: %d", total)
@@ -70,11 +74,15 @@ def scan_gmail_for_receipts(
     results: list[ScanResult] = []
     newly_scanned_ids: list[str] = []
     
+    from streamlit.runtime.scriptrunner_utils.script_run_context import add_script_run_ctx, get_script_run_ctx
+    ctx = get_script_run_ctx()
+    
     metadata_lock = threading.Lock()
     results_lock = threading.Lock()
     
     def _save_checkpoint():
         """Helper to persist current progress to Drive."""
+        nonlocal metadata_file_id
         with metadata_lock:
             if not newly_scanned_ids:
                 return
@@ -83,21 +91,37 @@ def scan_gmail_for_receipts(
             mark_emails_processed(newly_scanned_ids, metadata)
             
             try:
-                save_metadata(drive_service, root_folder_id, metadata, metadata_file_id)
-                logger.debug("Checkpoint: Saved %d processed IDs.", len(newly_scanned_ids))
+                from drive_service import get_drive_service
+                checkpoint_svc = get_drive_service()
+                new_id = save_metadata(checkpoint_svc, root_folder_id, metadata, metadata_file_id)
+                if new_id:
+                    metadata_file_id = new_id
+                logger.debug("Checkpoint: Saved %d processed IDs. (file_id=%s)", len(newly_scanned_ids), metadata_file_id)
                 newly_scanned_ids.clear()
             except Exception as exc:
                 logger.warning("Checkpoint save failed: %s", exc)
 
     def _worker(msg_id: str, idx: int) -> ScanResult:
         """Process a single email in a thread."""
-        try:
-            # Update progress (UI is thread-safe for basic text updates in Streamlit)
-            if progress_cb and idx % 2 == 0: # Reduce callback frequency
-                progress_cb(idx, total, f"בודק מיילים... ({idx + 1}/{total})")
+        if stop_event and stop_event.is_set():
+            return ScanResult(msg_id=msg_id, subject="", sender="", skipped=True, skip_reason="aborted")
 
-            # 3. Fetch full email
-            email: EmailMessage = fetch_email(gmail_service, msg_id)
+        # Register Streamlit context for this thread
+        add_script_run_ctx(threading.current_thread(), ctx)
+        
+        try:
+            # Update progress
+            if progress_cb: 
+                progress_cb(idx, total, f"🔍 סורק מיילים פוטנציאליים... ({idx + 1}/{total})")
+
+            # 3. Create thread-local Gmail and Drive services
+            from gmail_service import get_gmail_service
+            from drive_service import get_drive_service
+            
+            local_gmail_svc = get_gmail_service() 
+            local_drive_svc = get_drive_service()
+            
+            email: EmailMessage = fetch_email(local_gmail_svc, msg_id)
             
             # 4. Check likelihood (fast filter)
             likely, reason = is_likely_receipt(email)
@@ -123,7 +147,7 @@ def scan_gmail_for_receipts(
 
             # 6. Process through standard pipeline
             if progress_cb:
-                progress_cb(idx, total, f"**קבלת {email.provider or 'X'}!** מעבד: {email.subject[:30]}...")
+                progress_cb(idx, total, f"🧠 **מנתח עם AI:** {email.subject[:30]}...")
 
             hint_filename = receipt.filename_hint or f"{email.subject[:50]}.pdf"
             if receipt.mime_type == "application/pdf" and not hint_filename.endswith(".pdf"):
@@ -139,11 +163,12 @@ def scan_gmail_for_receipts(
             proc_result = process_file(
                 file_bytes=receipt.data,
                 original_filename=hint_filename,
-                service=drive_service,
+                service=local_drive_svc,
                 root_folder_id=root_folder_id,
                 email_date=email.date,
                 metadata=metadata, # Dedupe check uses shared dict
                 metadata_file_id=None, # Don't save inside!
+                email_body=email.body_html or email.body_text,
             )
 
             # Update shared structures under lock
@@ -159,7 +184,7 @@ def scan_gmail_for_receipts(
             )
 
         except Exception as exc:
-            logger.error("Worker error for %s: %s", msg_id, exc)
+            logger.error("Worker error for %s:\n%s", msg_id, traceback.format_exc())
             with metadata_lock:
                 newly_scanned_ids.append(msg_id)
             return ScanResult(msg_id=msg_id, subject="(שגיאה)", sender="", error=str(exc))
@@ -170,6 +195,10 @@ def scan_gmail_for_receipts(
         futures = [executor.submit(_worker, mid, i) for i, mid in enumerate(new_msg_ids)]
         
         for i, future in enumerate(concurrent.futures.as_completed(futures)):
+            if stop_event and stop_event.is_set():
+                logger.info("Scan stop requested. Aborting remaining workers.")
+                break
+
             res = future.result()
             with results_lock:
                 results.append(res)

@@ -5,16 +5,8 @@ app.py — Streamlit UI for the Invoice Manager.
 from __future__ import annotations
 import logging
 
-# ── Silence noisy background libraries as early as possible ─────────────────────
-for noisy_logger in [
-    "fontTools", "fontTools.subset", "fontTools.ttLib", 
-    "weasyprint", "playwright", "httpx", 
-    "googleapiclient", "google_auth_httplib2",
-    "PIL", "urllib3", "google_genai", "google.auth",
-    "drive_service", "gmail_service", "gmail_scanner", 
-    "email_processor", "gemini_service", "file_processor"
-]:
-    logging.getLogger(noisy_logger).setLevel(logging.ERROR) # Use ERROR for maximum silence
+# ── Centralized Logging ────────────────────────────────────────────────────────
+import logger_setup
 
 import os
 from datetime import date
@@ -28,11 +20,6 @@ from file_processor import process_file, MIME_TYPES
 from gmail_service import get_gmail_service
 from gmail_scanner import scan_gmail_for_receipts
 
-# ── Logging ─────────────────────────────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
-)
 
 # ── Page Config ─────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -101,8 +88,13 @@ def _require_password() -> bool:
     """
     import hmac
     import time
+    from config import REQUIRE_PASSWORD # Import here to ensure it's loaded
 
-    # No password → open (warn on cloud)
+    # If REQUIRE_PASSWORD=FALSE in env, skip entirely
+    if not REQUIRE_PASSWORD:
+        return True
+
+    # No password configured → open (warn on cloud)
     if not APP_PASSWORD:
         if os.getenv("STREAMLIT_SHARING_MODE"):  # running on Streamlit Cloud
             st.warning("⚠️ `APP_PASSWORD` לא הוגדר — האפליקציה פתוחה לכולם!")
@@ -216,31 +208,29 @@ def main() -> None:
         st.error("יש לתקן את שגיאות ההגדרה בסרגל הצדדי לפני השימוש.")
         st.stop()
 
-    # Initialise Drive service once (shared across tabs)
-    if "drive_service" not in st.session_state:
-        with st.spinner("מתחבר ל-Google Drive..."):
-            try:
-                st.session_state["drive_service"] = get_drive_service()
-            except Exception as exc:
-                st.error(f"❌ שגיאה בחיבור ל-Google Drive: {exc}")
-                return
-    service = st.session_state["drive_service"]
+    # Authenticate once to ensure credentials exist
+    try:
+        get_drive_service()
+    except Exception as exc:
+        st.error(f"❌ שגיאה בחיבור ל-Drive: {exc}")
+        return
 
     # ── Two action tabs ─────────────────────────────────────────────────────────
     tab_upload, tab_gmail, tab_history = st.tabs(["📎 העלאת קבצים", "📧 ייבא מהמייל", "📜 היסטוריה"])
 
     with tab_upload:
-        _upload_tab(service)
+        _upload_tab()
 
     with tab_gmail:
-        _gmail_tab(service)
+        _gmail_tab()
 
     with tab_history:
-        _history_tab(service)
+        _history_tab()
 
 
-def _upload_tab(service) -> None:
+def _upload_tab() -> None:
     """Manual file upload tab."""
+    service = get_drive_service()
     uploaded_files = st.file_uploader(
         "📎 גרור קבלות לכאן או לחץ לבחירת קבצים",
         type=[ext.lstrip(".") for ext in MIME_TYPES],
@@ -256,23 +246,49 @@ def _upload_tab(service) -> None:
         _run_processing(uploaded_files, service)
 
 
-def _gmail_tab(service) -> None:
+def _gmail_tab() -> None:
     """Gmail scanner tab."""
     st.markdown(
         "סריקת תיבת הדואר הנכנס לשנה האחרונה — איתור קבלות אוטומטי.  \n"
         "מיילים שנסרקו כבר לא יוצגו שוב בסריקות הבאות."
     )
 
-    if st.button("📧 ייבא קבלות מהמייל", type="primary", width="stretch", key="gmail_scan"):
-        _run_gmail_scan(service)
+    if st.button("📧 ייבא קבלות מהמייל", type="primary", width="stretch", key="gmail_scan", disabled=st.session_state.get("scan_active", False)):
+        # We don't clear results here anymore to allow resumption/accumulation.
+        # User has the "נקה רשימה" button to reset.
+        _run_gmail_scan()
 
 
-def _run_gmail_scan(drive_service) -> None:
+def _run_gmail_scan() -> None:
     """Run Gmail scan and display results with structured grouping."""
+    drive_service = get_drive_service()
     st.divider()
     
-    # Live logging container
-    log_container = st.status("🔍 מתחיל סריקת Gmail...", expanded=True)
+    # Initialize stop event in session state
+    if "scan_stop_event" not in st.session_state:
+        import threading
+        st.session_state.scan_stop_event = threading.Event()
+    
+    st.session_state.scan_stop_event.clear()
+
+    # Initialize session state for persistence
+    if "gmail_results" not in st.session_state:
+        st.session_state.gmail_results = []
+    if "scan_active" not in st.session_state:
+        st.session_state.scan_active = False
+
+    # Show stop button if scanning
+    col_status, col_stop = st.columns([4, 1])
+    with col_stop:
+        if st.button("🛑 עצור", type="secondary", use_container_width=True):
+            st.session_state.scan_stop_event.set()
+            st.warning("עוצר סריקה... אנא המתן לסיום התהליכים הנוכחיים.")
+
+    with col_status:
+        # Live logging container
+        log_status = st.empty()
+        log_container = st.status("🔍 מתחיל סריקת Gmail...", expanded=True)
+    
     progress_bar = st.progress(0)
 
     try:
@@ -286,36 +302,52 @@ def _run_gmail_scan(drive_service) -> None:
         progress_label = f"סורק מיילים... ({current + 1}/{total})"
         progress_bar.progress(frac, text=progress_label)
         
-        # Only log significant events to the status container to keep it clean
-        if "**" in text or "✅" in text or "❌" in text:
+        # Distinction: general status vs important events
+        if "🧠" in text:
+            log_container.write(f"• {text}")
+        elif "🔍" in text:
+            log_status.text(text) # Fast changing status in small text
+        elif "✅" in text or "❌" in text:
             log_container.write(f"• {text}")
 
     try:
+        st.session_state.scan_active = True
         results = scan_gmail_for_receipts(
-            drive_service=drive_service,
-            gmail_service=gmail_svc,
             root_folder_id=DRIVE_FOLDER_ID,
             progress_cb=progress_cb,
+            stop_event=st.session_state.scan_stop_event,
         )
+        st.session_state.gmail_results.extend(results)
     except Exception as exc:
         st.error(f"❌ שגיאת סריקה: {exc}")
         log_container.update(label="❌ הסריקה נכשלה", state="error")
         return
+    finally:
+        st.session_state.scan_active = False
 
     log_container.update(label="✅ הסריקה הושלמה", state="complete", expanded=False)
     progress_bar.empty()
+    log_status.empty()
 
+    # Categorize and display results
+    _display_gmail_results(st.session_state.gmail_results)
+
+def _display_gmail_results(results: list) -> None:
+    """Display the cumulative results of Gmail scans."""
     if not results:
-        st.success("✅ אין מיילים חדשים לעיבוד.")
         return
 
-    # Categorize results
+    st.divider()
+    c_head, c_clear = st.columns([4, 1])
+    c_head.subheader("📊 תוצאות סריקה (מצטבר)")
+    if c_clear.button("🗑️ נקה רשימה", use_container_width=True):
+        st.session_state.gmail_results = []
+        st.rerun()
+
     success_list = [r for r in results if r.process_result and r.process_result.status == "success"]
     skip_list = [r for r in results if r.skipped or (r.process_result and r.process_result.status in ["duplicate", "skipped"])]
     error_list = [r for r in results if r.error or (r.process_result and r.process_result.status == "error")]
 
-    # Summary metrics
-    st.subheader("📊 סיכום סריקה")
     c1, c2, c3 = st.columns(3)
     c1.metric("✅ הועלו", len(success_list))
     c2.metric("⏭️ דולגו", len(skip_list))
@@ -411,9 +443,16 @@ def _run_processing(uploaded_files: list, service) -> None:
             for r in error_list:
                 st.error(f"**{r.original_filename}** — {r.message}")
 
-def _history_tab(service) -> None:
+def _history_tab() -> None:
     """Display history of processed receipts from metadata.json."""
+    service = get_drive_service()
     st.markdown("### 📜 קבלות שנוספו למערכת")
+    
+    c_title, c_refresh = st.columns([4, 1])
+    with c_refresh:
+        if st.button("🔄 רענן", icon="🔄", use_container_width=True, key="history_top_refresh"):
+            st.rerun()
+
     st.info("כאן מופיע ריכוז של כל הקבלות שעובדו ונוספו ל-Google Drive.")
 
     from deduplication import load_metadata
@@ -434,16 +473,36 @@ def _history_tab(service) -> None:
 
     # Convert to list for display
     history_data = []
+    total_amount = 0.0
+    business_count = 0
+    
     for h, data in hashes.items():
+        amt = data.get('amount', 0)
+        is_biz = data.get("is_business", True)
+        
         history_data.append({
             "תאריך": data.get("date", "לא ידוע"),
-            "סכום": f"{data.get('amount', 0):,.2f}" if data.get('amount') else "-",
+            "סכום_נומרי": float(amt) if amt else 0.0,
+            "סכום": f"{amt:,.2f}" if amt else "-",
             "ספק": data.get("provider", "לא ידוע"),
             "סוג": data.get("expense_type", "לא ידוע"),
             "מקור": data.get("original_filename", h[:8]),
             "קישור": data.get("drive_link", ""),
-            "עסקי": "✅" if data.get("is_business", True) else "👤",
+            "עסקי": "✅ עסקי" if is_biz else "👤 פרטי",
         })
+        
+        if amt:
+            total_amount += float(amt)
+        if is_biz:
+            business_count += 1
+            
+    # ── Summary Metrics ───────────────────────────────────────────────────────
+    m1, m2, m3 = st.columns(3)
+    m1.metric("💰 סה\"כ הוצאות", f"₪{total_amount:,.2f}")
+    m2.metric("📄 מספר קבלות", len(history_data))
+    m3.metric("🏢 הוצאות עסק", f"{business_count}/{len(history_data)}")
+    
+    st.divider()
 
     # Sort by date descending
     history_data.sort(key=lambda x: (x["תאריך"] == "לא ידוע", x["תאריך"]), reverse=True)
@@ -466,21 +525,23 @@ def _history_tab(service) -> None:
     elif sort_on == "תאריך ↑":
         df = df.sort_values("תאריך", ascending=True)
     elif sort_on == "סכום ↓":
-        # Temporary numeric column for sorting
-        df["_amt"] = df["סכום"].str.replace(",", "").replace("-", "0").astype(float)
-        df = df.sort_values("_amt", ascending=False).drop(columns=["_amt"])
+        df = df.sort_values("סכום_נומרי", ascending=False)
     elif sort_on == "ספק":
         df = df.sort_values("ספק")
 
+    # Drop the helper numeric column before display
+    display_df = df.drop(columns=["סכום_נומרי"])
+
     st.dataframe(
-        df,
+        display_df,
         column_config={
-            "קישור": st.column_config.LinkColumn("📂 פתח ב-Drive", width="medium"),
+            "קישור": st.column_config.LinkColumn("📂 פתח", width="small"),
             "סכום": st.column_config.TextColumn("💰 סכום", width="small"),
-            "תאריך": st.column_config.DateColumn("📅 תאריך", format="YYYY-MM-DD"),
-            "ספק": st.column_config.TextColumn("🏢 ספק"),
-            "סוג": st.column_config.TextColumn("🏷️ סוג"),
-            "עסקי": st.column_config.TextColumn("📋"),
+            "תאריך": st.column_config.DateColumn("📅 תאריך", format="YYYY-MM-DD", width="medium"),
+            "ספק": st.column_config.TextColumn("🏢 ספק", width="medium"),
+            "סוג": st.column_config.TextColumn("🏷️ קטגוריה", width="medium"),
+            "עסקי": st.column_config.TextColumn("👤/🏢", width="small"),
+            "מקור": st.column_config.TextColumn("📄 קובץ מקורי", width="medium"),
         },
         width="stretch",
         hide_index=True,

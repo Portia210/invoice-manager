@@ -48,6 +48,8 @@ def _find_metadata_file(service: "Resource", folder_id: str) -> str | None:
         .execute()
     )
     files = result.get("files", [])
+    if len(files) > 1:
+        logger.warning("Found %d metadata.json files! Using the first one (id=%s)", len(files), files[0]["id"])
     return files[0]["id"] if files else None
 
 
@@ -77,7 +79,7 @@ def save_metadata(
     folder_id: str,
     metadata: dict,
     existing_file_id: str | None,
-) -> None:
+) -> str:
     """Create or update metadata.json in the given Google Drive folder."""
     from googleapiclient.http import MediaIoBaseUpload
 
@@ -91,14 +93,17 @@ def save_metadata(
             .execute()
         )
         logger.debug("Updated metadata.json (id=%s)", existing_file_id)
+        return existing_file_id
     else:
         file_metadata = {"name": METADATA_FILENAME, "parents": [folder_id]}
-        (
+        folder = (
             service.files()
             .create(body=file_metadata, media_body=media, supportsAllDrives=True)
             .execute()
         )
-        logger.debug("Created metadata.json in folder %s", folder_id)
+        new_id = folder["id"]
+        logger.debug("Created metadata.json in folder %s (id=%s)", folder_id, new_id)
+        return new_id
 
 
 def is_duplicate(md5_hash: str, metadata: dict) -> bool:
