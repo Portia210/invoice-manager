@@ -17,7 +17,9 @@ load_dotenv(dotenv_path=".env")
 
 CREDENTIALS_PATH = os.getenv("CREDENTIALS_PATH", "credentials.json")
 TOKEN_PATH = "token.json"
-SCOPES = ["https://www.googleapis.com/auth/drive"]
+
+# Import scopes from config (covers Drive + Gmail)
+from config import GOOGLE_SCOPES as SCOPES
 PORT = 8088
 
 

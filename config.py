@@ -23,6 +23,12 @@ CREDENTIALS_PATH: str = _get_secret("CREDENTIALS_PATH", "credentials.json")
 GEMINI_MODEL: str = "gemini-2.0-flash"
 APP_PASSWORD: str = _get_secret("APP_PASSWORD")
 
+# ── OAuth Scopes ─────────────────────────────────────────────────────────────────
+GOOGLE_SCOPES: list[str] = [
+    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/gmail.readonly",
+]
+
 # ── Hebrew Calendar ─────────────────────────────────────────────────────────────
 HEBREW_MONTHS: dict[int, str] = {
     1: "ינואר",

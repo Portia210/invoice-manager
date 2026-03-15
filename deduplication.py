@@ -1,5 +1,13 @@
 """
 deduplication.py — MD5 hashing and metadata.json management in Google Drive.
+
+metadata.json structure:
+{
+  "hashes": {
+    "<md5>": {"original_filename": "...", "drive_link": "...", "date": "...", "amount": 123.0}
+  },
+  "processed_email_ids": ["<gmail_msg_id>", ...]
+}
 """
 
 from __future__ import annotations
@@ -46,9 +54,7 @@ def _find_metadata_file(service: "Resource", folder_id: str) -> str | None:
 def load_metadata(service: "Resource", folder_id: str) -> tuple[dict, str | None]:
     """
     Load metadata.json from Google Drive.
-
-    Returns:
-        (metadata_dict, file_id_or_None)
+    Returns: (metadata_dict, file_id_or_None)
     """
     file_id = _find_metadata_file(service, folder_id)
     if file_id is None:
@@ -86,10 +92,7 @@ def save_metadata(
         )
         logger.debug("Updated metadata.json (id=%s)", existing_file_id)
     else:
-        file_metadata = {
-            "name": METADATA_FILENAME,
-            "parents": [folder_id],
-        }
+        file_metadata = {"name": METADATA_FILENAME, "parents": [folder_id]}
         (
             service.files()
             .create(body=file_metadata, media_body=media, supportsAllDrives=True)
@@ -103,12 +106,51 @@ def is_duplicate(md5_hash: str, metadata: dict) -> bool:
     return md5_hash in metadata.get("hashes", {})
 
 
-def record_file(md5_hash: str, filename: str, drive_link: str, metadata: dict) -> dict:
+def is_amount_date_duplicate(
+    date_str: str,
+    amount: float | None,
+    metadata: dict,
+) -> bool:
+    """
+    Secondary dedup check: return True if another file with the same date
+    AND same amount already exists in metadata.
+    """
+    if not date_str or amount is None:
+        return False
+    for entry in metadata.get("hashes", {}).values():
+        if entry.get("date") == date_str and entry.get("amount") == amount:
+            return True
+    return False
+
+
+def record_file(
+    md5_hash: str,
+    filename: str,
+    drive_link: str,
+    metadata: dict,
+    ai_data: dict | None = None,
+) -> dict:
     """Add a processed file record to the metadata dict and return it."""
     if "hashes" not in metadata:
         metadata["hashes"] = {}
-    metadata["hashes"][md5_hash] = {
-        "original_filename": filename,
-        "drive_link": drive_link,
-    }
+    entry: dict = {"original_filename": filename, "drive_link": drive_link}
+    if ai_data:
+        entry["date"] = ai_data.get("date", "")
+        entry["amount"] = ai_data.get("total_amount")
+    metadata["hashes"][md5_hash] = entry
+    return metadata
+
+
+# ── Gmail processed IDs ────────────────────────────────────────────────────────
+
+def get_processed_email_ids(metadata: dict) -> set[str]:
+    """Return the set of Gmail message IDs already processed."""
+    return set(metadata.get("processed_email_ids", []))
+
+
+def mark_emails_processed(msg_ids: list[str], metadata: dict) -> dict:
+    """Add message IDs to the processed set in metadata."""
+    existing = set(metadata.get("processed_email_ids", []))
+    existing.update(msg_ids)
+    metadata["processed_email_ids"] = sorted(existing)
     return metadata

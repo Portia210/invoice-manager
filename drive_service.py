@@ -18,11 +18,9 @@ from functools import lru_cache
 from googleapiclient.discovery import build, Resource
 from googleapiclient.http import MediaIoBaseUpload
 
-from config import CREDENTIALS_PATH
+from config import CREDENTIALS_PATH, GOOGLE_SCOPES as SCOPES
 
 logger = logging.getLogger(__name__)
-
-SCOPES = ["https://www.googleapis.com/auth/drive"]
 TOKEN_PATH = "token.json"
 
 

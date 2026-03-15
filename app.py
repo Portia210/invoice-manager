@@ -13,6 +13,8 @@ from config import DRIVE_FOLDER_ID, CREDENTIALS_PATH, GEMINI_API_KEY
 from config import APP_PASSWORD
 from drive_service import get_drive_service
 from file_processor import process_file, MIME_TYPES
+from gmail_service import get_gmail_service
+from gmail_scanner import scan_gmail_for_receipts
 
 # ── Logging ─────────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -202,8 +204,28 @@ def main() -> None:
         st.error("יש לתקן את שגיאות ההגדרה בסרגל הצדדי לפני השימוש.")
         st.stop()
 
+    # Initialise Drive service once (shared across tabs)
+    if "drive_service" not in st.session_state:
+        with st.spinner("מתחבר ל-Google Drive..."):
+            try:
+                st.session_state["drive_service"] = get_drive_service()
+            except Exception as exc:
+                st.error(f"❌ שגיאה בחיבור ל-Google Drive: {exc}")
+                return
+    service = st.session_state["drive_service"]
 
-    # File uploader
+    # ── Two action tabs ─────────────────────────────────────────────────────────
+    tab_upload, tab_gmail = st.tabs(["📎 העלאת קבצים", "📧 ייבא מהמייל"])
+
+    with tab_upload:
+        _upload_tab(service)
+
+    with tab_gmail:
+        _gmail_tab(service)
+
+
+def _upload_tab(service) -> None:
+    """Manual file upload tab."""
     uploaded_files = st.file_uploader(
         "📎 גרור קבלות לכאן או לחץ לבחירת קבצים",
         type=[ext.lstrip(".") for ext in MIME_TYPES],
@@ -216,21 +238,93 @@ def main() -> None:
         return
 
     if st.button("🚀 עבד קבלות", type="primary", use_container_width=True):
-        _run_processing(uploaded_files)
+        _run_processing(uploaded_files, service)
 
 
-def _run_processing(uploaded_files: list) -> None:
+def _gmail_tab(service) -> None:
+    """Gmail scanner tab."""
+    st.markdown(
+        "סריקת תיבת הדואר הנכנס לשנה האחרונה — איתור קבלות אוטומטי.  \n"
+        "מיילים שנסרקו כבר לא יוצגו שוב בסריקות הבאות."
+    )
+
+    if st.button("📧 ייבא קבלות מהמייל", type="primary", use_container_width=True, key="gmail_scan"):
+        _run_gmail_scan(service)
+
+
+def _run_gmail_scan(drive_service) -> None:
+    """Run Gmail scan and display results."""
+    st.divider()
+    progress = st.progress(0, text="מתחבר ל-Gmail...")
+    status = st.empty()
+
+    try:
+        gmail_svc = get_gmail_service()
+    except Exception as exc:
+        st.error(f"❌ שגיאה בחיבור ל-Gmail: {exc}")
+        return
+
+    def progress_cb(current: int, total: int, text: str) -> None:
+        frac = (current / total) if total > 0 else 0
+        progress.progress(frac, text=text)
+        status.markdown(f"*{text}*")
+
+    try:
+        results = scan_gmail_for_receipts(
+            drive_service=drive_service,
+            gmail_service=gmail_svc,
+            root_folder_id=DRIVE_FOLDER_ID,
+            progress_cb=progress_cb,
+        )
+    except Exception as exc:
+        st.error(f"❌ שגיאת סריקה: {exc}")
+        return
+
+    progress.progress(1.0, text="✅ סריקה הושלמה!")
+    status.empty()
+
+    if not results:
+        st.success("✅ אין מיילים חדשים לעיבוד.")
+        return
+
+    # Summary metrics
+    total = len(results)
+    uploaded = sum(1 for r in results if r.process_result and r.process_result.status == "success")
+    dupes = sum(1 for r in results if r.process_result and r.process_result.status == "duplicate")
+    skipped = sum(1 for r in results if r.skipped)
+    errors = sum(1 for r in results if r.error or (r.process_result and r.process_result.status == "error"))
+
+    st.subheader("📊 סיכום סריקה")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("✅ הועלו", uploaded)
+    c2.metric("⚠️ כפולים", dupes)
+    c3.metric("⏭️ לא קבלה", skipped)
+    c4.metric("❌ שגיאות", errors)
+
+    # Results list
+    st.markdown("### פירוט")
+    for r in results:
+        subject = r.subject[:60] or "(ללא נושא)"
+        if r.skipped:
+            st.markdown(f"⏭️ **{subject}** — לא נמצאה קבלה")
+        elif r.error:
+            st.error(f"❌ **{subject}** — {r.error}")
+        elif r.process_result:
+            pr = r.process_result
+            if pr.status == "success":
+                biz = "✅" if pr.is_business else "🚫 NOT_BUSINESS"
+                link = f"[פתח]({pr.drive_link})" if pr.drive_link else ""
+                st.success(f"{biz} **{subject}**  \n`{pr.new_filename}` → {pr.target_folder} {link}")
+            elif pr.status == "duplicate":
+                st.warning(f"⚠️ **{subject}** — כפול, דולג")
+            else:
+                st.error(f"❌ **{subject}** — {pr.message}")
+
+
+def _run_processing(uploaded_files: list, service) -> None:
     """Process all uploaded files and display results."""
     st.divider()
     st.subheader(f"📊 מעבד {len(uploaded_files)} קובץ/ים...")
-
-    # Initialise Drive service once
-    with st.spinner("מתחבר ל-Google Drive..."):
-        try:
-            service = get_drive_service()
-        except Exception as exc:
-            st.error(f"❌ שגיאה בחיבור ל-Google Drive: {exc}")
-            return
 
     results = []
     progress_bar = st.progress(0, text="מתחיל עיבוד...")

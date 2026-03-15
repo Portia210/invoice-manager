@@ -34,7 +34,7 @@ class ReceiptAnalysis(BaseModel):
     )
     provider: str = Field(description="שם הספק / העסק")
     expense_type: str = Field(
-        description=f"סוג ההוצאה מהרשימה בלבד: {ALL_EXPENSES}"
+        description=f"סוג ההוצאה מהרשימה בלבד. אם לא הוצאה עסקית, החזר 'NOT_BUSINESS'. רשימה: {ALL_EXPENSES}"
     )
     is_annual: bool = Field(
         default=False,
@@ -44,17 +44,25 @@ class ReceiptAnalysis(BaseModel):
         default=False,
         description=f"True רק עבור רכוש קבוע: {FIXED_ASSETS}",
     )
-    total_amount: Optional[float] = Field(
-        default=None, description="סכום כולל בש\"ח (מספר בלבד)"
+    is_business_expense: bool = Field(
+        default=True,
+        description="True אם זו הוצאה עסקית מוכרת. False עבור קניות פרטיות, מנויים אישיים, בידור וכד'.",
     )
-    currency: str = Field(default="ILS", description="מטבע, בד\"כ ILS")
+    confidence: float = Field(
+        default=1.0,
+        description="רמת הביטחון בסיווג, בין 0.0 ל-1.0",
+    )
+    total_amount: Optional[float] = Field(
+        default=None, description='סכום כולל (מספר בלבד, ללא סימן מטבע)'
+    )
+    currency: str = Field(default="ILS", description='מטבע: ILS, USD, EUR וכד\'')
 
 
 _PROMPT = f"""
 אתה מנתח קבלות וחשבוניות עסקיות בישראל.
-נתח את הקובץ המצורף ומלא את כל שדות ה-JSON לפי הפירוט הבא.
+נתח את הקובץ המצורף ומלא את כל שדות ה-JSON.
 
-רשימת הוצאות מוכרות (חובה לבחור מהרשימה):
+רשימת הוצאות מוכרות (חובה לבחור מהרשימה, אלא אם לא עסקי):
 {json.dumps(ALL_EXPENSES, ensure_ascii=False)}
 
 הוצאות שנתיות (is_annual=true):
@@ -64,19 +72,19 @@ _PROMPT = f"""
 {json.dumps(FIXED_ASSETS, ensure_ascii=False)}
 
 כללים:
-1. expense_type חייב להיות מהרשימה בלבד.
-2. תאריך בפורמט YYYY-MM-DD. אם לא ניתן לזהות — השתמש בתאריך היום ({date.today()}).
-3. is_annual=true **רק** עבור פריטים מרשימת ההוצאות השנתיות.
-4. is_fixed_asset=true **רק** עבור רכוש קבוע.
+1. expense_type חייב להיות מהרשימה, או 'NOT_BUSINESS' אם לא הוצאה עסקית.
+2. is_business_expense=false עבור: קניות פרטיות, בידור, מנויים אישיים (נטפליקס, ספוטיפיי וכד'), מתנות.
+3. תאריך בפורמט YYYY-MM-DD. אם לא ידוע — השתמש בתאריך היום ({date.today()}).
+4. is_annual=true **רק** עבור פריטים מרשימת ההוצאות השנתיות.
+5. is_fixed_asset=true **רק** עבור רכוש קבוע.
+6. confidence — רמת ביטחון בין 0 ל-1.
 """
 
 
 def analyze_receipt(file_bytes: bytes, mime_type: str) -> dict:
     """
     Send the receipt image/PDF to Gemini and return the parsed result as a dict.
-
-    Uses response_schema=ReceiptAnalysis to enforce structured output —
-    Gemini is constrained to return a valid JSON object matching the schema.
+    Uses response_schema=ReceiptAnalysis to enforce structured output.
     """
     blob = types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
 
@@ -90,8 +98,6 @@ def analyze_receipt(file_bytes: bytes, mime_type: str) -> dict:
         ),
     )
 
-    # With response_schema set, Gemini guarantees a valid object —
-    # parse directly into the Pydantic model for full validation.
     try:
         result = ReceiptAnalysis.model_validate_json(response.text)
     except Exception as exc:
